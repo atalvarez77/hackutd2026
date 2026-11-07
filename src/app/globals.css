@@ -1,0 +1,57 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f8fafc;
+  --foreground: #0f172a;
+  --sf-red: #D3122A;
+  --sf-red-dark: #9F0B1E;
+  --sf-red-light: #FEECEE;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-sf-red: var(--sf-red);
+  --color-sf-red-dark: var(--sf-red-dark);
+  --color-sf-red-light: var(--sf-red-light);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+}
+
+/* Custom animations for voice call wave and radar pulse */
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.95);
+    opacity: 0.8;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 0.3;
+  }
+  100% {
+    transform: scale(0.95);
+    opacity: 0.8;
+  }
+}
+
+.animate-pulse-ring {
+  animation: pulse-ring 2.5s infinite ease-in-out;
+}
+
+@keyframes wave {
+  0%, 100% { height: 8px; }
+  50% { height: 36px; }
+}
+
+.animate-wave-1 { animation: wave 1.2s infinite ease-in-out; }
+.animate-wave-2 { animation: wave 0.9s infinite ease-in-out 0.2s; }
+.animate-wave-3 { animation: wave 1.5s infinite ease-in-out 0.4s; }
+.animate-wave-4 { animation: wave 1.0s infinite ease-in-out 0.1s; }
+.animate-wave-5 { animation: wave 1.3s infinite ease-in-out 0.3s; }
+
