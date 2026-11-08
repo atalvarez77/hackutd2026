@@ -1,7 +1,7 @@
 use spacetimedb::{table, reducer, ReducerContext, Table};
 
 // -----------------------------------------------------------------------------
-// 1. TABLES (Matching Hackathon Whiteboard Spec)
+// 1. TABLES
 // -----------------------------------------------------------------------------
 
 #[table(accessor = customers, public)]
@@ -30,7 +30,7 @@ pub struct Customer {
 pub struct Policy {
     #[primary_key]
     pub policy_id: u64,
-    pub customer_id: u64,
+    pub customer_id: u64,            // Foreign Key -> Customer.id
     pub policy_number: String,
     pub policy_type: String,
     pub coverage_limit: f64,
@@ -40,8 +40,8 @@ pub struct Policy {
 #[table(accessor = active_calls, public)]
 pub struct ActiveCall {
     #[primary_key]
-    pub id: u64,
-    pub customer_id: u64,
+    pub id: u64,                     // Unique Call Session ID
+    pub customer_id: u64,            // Foreign Key -> Customer.id
     pub live_transcript: String,
     pub status: String,              // "talking_ai", "agent_joined", "completed"
 }
@@ -49,21 +49,23 @@ pub struct ActiveCall {
 #[table(accessor = triage_queue, public)]
 pub struct TriageQueue {
     #[primary_key]
-    pub ticket_id: u64,
-    pub customer_id: u64,
+    pub ticket_id: u64,              // Unique Triage Ticket ID
+    pub customer_id: u64,            // Foreign Key -> Customer.id
+    pub call_id: u64,                // Foreign Key -> ActiveCall.id
     pub priority_score: u32,         // 0 to 100 evaluated by Nemotron
     pub category: String,
     pub summary_reason: String,
     pub detected_hazard: String,
-    pub status: String,
+    pub status: String,              // "AI_ACTIVE", "AGENT_CONNECTED", "RESOLVED"
 }
 
 #[table(accessor = claims, public)]
 pub struct Claim {
     #[primary_key]
-    pub id: u64,
-    pub customer_id: u64,
-    pub policy_id: u64,
+    pub id: u64,                     // Unique Claim Record ID
+    pub customer_id: u64,            // Foreign Key -> Customer.id
+    pub policy_id: u64,              // Foreign Key -> Policy.policy_id
+    pub call_id: u64,                // Foreign Key -> ActiveCall.id
     pub description: String,
     pub hazard_type: String,
     pub est_payout: f64,
@@ -74,7 +76,7 @@ pub struct Claim {
 }
 
 // -----------------------------------------------------------------------------
-// 2. INITIALIZATION / SEED REDUCER (Pre-Disaster Baseline)
+// 2. INITIALIZATION / SEED REDUCER
 // -----------------------------------------------------------------------------
 
 #[reducer(init)]
@@ -107,6 +109,16 @@ pub fn init_simulation(ctx: &ReducerContext) {
         policy_type: "Homeowners Comprehensive (HO-3)".to_string(),
         coverage_limit: 350000.0,
         deductible: 1000.0,
+    });
+
+    // Example second policy for Sofia: Automobile Policy
+    ctx.db.policies().insert(Policy {
+        policy_id: 101,
+        customer_id: 1,
+        policy_number: "SF-89214-AU".to_string(),
+        policy_type: "Automobile Comprehensive".to_string(),
+        coverage_limit: 50000.0,
+        deductible: 500.0,
     });
 
     // 2. Liam Carter
@@ -264,6 +276,7 @@ pub fn init_simulation(ctx: &ReducerContext) {
 // 3. REDUCERS
 // -----------------------------------------------------------------------------
 
+/// Appends a new conversation segment to the specific call session transcript.
 #[reducer]
 pub fn update_call_transcript(
     ctx: &ReducerContext,
@@ -272,7 +285,9 @@ pub fn update_call_transcript(
     transcript_chunk: String,
 ) {
     if let Some(mut call) = ctx.db.active_calls().id().find(call_id) {
-        call.live_transcript.push_str(" ");
+        if !call.live_transcript.is_empty() {
+            call.live_transcript.push_str("\n");
+        }
         call.live_transcript.push_str(&transcript_chunk);
         ctx.db.active_calls().id().update(call);
     } else {
@@ -283,13 +298,23 @@ pub fn update_call_transcript(
             status: "talking_ai".to_string(),
         });
     }
+
+    // Update customer status to active calling
+    if let Some(mut cust) = ctx.db.customers().id().find(customer_id) {
+        if cust.status != "calling" {
+            cust.status = "calling".to_string();
+            ctx.db.customers().id().update(cust);
+        }
+    }
 }
 
+/// Updates or creates a distinct triage queue ticket linked to a call session.
 #[reducer]
 pub fn update_triage_score(
     ctx: &ReducerContext,
     ticket_id: u64,
     customer_id: u64,
+    call_id: u64,
     priority_score: u32,
     category: String,
     summary_reason: String,
@@ -305,6 +330,7 @@ pub fn update_triage_score(
         ctx.db.triage_queue().insert(TriageQueue {
             ticket_id,
             customer_id,
+            call_id,
             priority_score,
             category,
             summary_reason,
@@ -314,12 +340,14 @@ pub fn update_triage_score(
     }
 }
 
+/// Creates or updates a specific claim draft tied to a customer, policy, and call session.
 #[reducer]
 pub fn create_or_update_claim(
     ctx: &ReducerContext,
     claim_id: u64,
     customer_id: u64,
     policy_id: u64,
+    call_id: u64,
     description: String,
     hazard_type: String,
     est_payout: f64,
@@ -343,6 +371,7 @@ pub fn create_or_update_claim(
             id: claim_id,
             customer_id,
             policy_id,
+            call_id,
             description,
             hazard_type,
             est_payout,
@@ -354,6 +383,7 @@ pub fn create_or_update_claim(
     }
 }
 
+/// Agent approval button: enforces that caller verbal consent is true before final submission.
 #[reducer]
 pub fn agent_approve_claim(
     ctx: &ReducerContext,
@@ -366,6 +396,54 @@ pub fn agent_approve_claim(
             claim.claim_number = claim_number;
             claim.status = "SUBMITTED".to_string();
             ctx.db.claims().id().update(claim);
+        }
+    }
+}
+
+/// Agent Interjection: "Step In" button switches call status to mute AI bot
+#[reducer]
+pub fn join_call_by_agent(ctx: &ReducerContext, call_id: u64) {
+    if let Some(mut call) = ctx.db.active_calls().id().find(call_id) {
+        call.status = "agent_joined".to_string();
+        ctx.db.active_calls().id().update(call);
+    }
+
+    // Update triage ticket status to show human is handling it
+    let matching_ticket_id = ctx.db.triage_queue().iter()
+        .find(|t| t.call_id == call_id)
+        .map(|t| t.ticket_id);
+
+    if let Some(ticket_id) = matching_ticket_id {
+        if let Some(mut ticket) = ctx.db.triage_queue().ticket_id().find(ticket_id) {
+            ticket.status = "AGENT_CONNECTED".to_string();
+            ctx.db.triage_queue().ticket_id().update(ticket);
+        }
+    }
+}
+
+/// Terminates call session and resolves the associated triage ticket
+#[reducer]
+pub fn end_call(ctx: &ReducerContext, call_id: u64) {
+    if let Some(mut call) = ctx.db.active_calls().id().find(call_id) {
+        call.status = "completed".to_string();
+        let cust_id = call.customer_id;
+        ctx.db.active_calls().id().update(call);
+
+        if let Some(mut cust) = ctx.db.customers().id().find(cust_id) {
+            cust.status = "completed".to_string();
+            ctx.db.customers().id().update(cust);
+        }
+    }
+
+    // Mark triage ticket as RESOLVED so it clears from the active priority queue
+    let matching_ticket_id = ctx.db.triage_queue().iter()
+        .find(|t| t.call_id == call_id)
+        .map(|t| t.ticket_id);
+
+    if let Some(ticket_id) = matching_ticket_id {
+        if let Some(mut ticket) = ctx.db.triage_queue().ticket_id().find(ticket_id) {
+            ticket.status = "RESOLVED".to_string();
+            ctx.db.triage_queue().ticket_id().update(ticket);
         }
     }
 }

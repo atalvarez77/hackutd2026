@@ -14,6 +14,7 @@ export default __t.row({
   id: __t.u64().primaryKey(),
   customerId: __t.u64().name("customer_id"),
   policyId: __t.u64().name("policy_id"),
+  callId: __t.u64().name("call_id"),
   description: __t.string(),
   hazardType: __t.string().name("hazard_type"),
   estPayout: __t.f64().name("est_payout"),
