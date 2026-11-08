@@ -1,169 +1,433 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { CustomerProfile } from '@/types/statefarm';
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useMemo,
+} from 'react';
 import { initialCustomers } from '@/data/mockCustomers';
-import confetti from 'canvas-confetti';
+import type {
+  CallStatus,
+  ClaimFlow,
+  ContactRequest,
+  CustomerProfile,
+  Language,
+  Line,
+  RequestChannel,
+  ToolCall,
+  UrgencyLevel,
+} from '@/types/statefarm';
+import { first, hazardFor, HAZARD_RE, nowTime } from '@/lib/hn';
+import { DbConnection } from '@/module_bindings';
+import type { Customer, Policy, Claim, TriageQueue, ActiveCall } from '@/module_bindings/types';
 
-interface StateFarmContextType {
+export interface AppState {
   customers: CustomerProfile[];
   activeCustomerId: string;
-  setActiveCustomerId: (id: string) => void;
+  claims: Record<string, ClaimFlow>;
+  contactRequests: ContactRequest[];
+  agentTakeover: Record<string, boolean>;
+  transcripts: Record<string, Line[]>;
+  toolRuns: Record<string, ToolCall[]>;
+  priorityOverride: Record<string, UrgencyLevel | null>;
+  callStatus: Record<string, CallStatus>;
+  reqSeq: number;
+  catMode: { on: boolean; name: string; at?: number };
+  epoch: number;
+  stamps: Record<string, number>;
+}
+
+export interface ToolStep {
+  name: string;
+  output: string;
+  effect?: () => void;
+}
+
+export type DbStatus = 'connecting' | 'connected' | 'error' | 'off';
+
+interface Ctx extends AppState {
+  hydrated: boolean;
+  lastSync: number;
+  dbStatus: DbStatus;
   activeCustomer: CustomerProfile;
-  sendChatMessage: (text: string, sender?: 'customer' | 'bot' | 'agent') => Promise<void>;
-  approveClaimDraft: (customerId: string) => void;
-  updateCustomerLanguage: (customerId: string, lang: 'en' | 'es') => void;
-  simulateHazardDetection: (customerId: string, hazardDescription: string, estimatedLoss: number) => void;
+  setActiveCustomerId: (id: string) => void;
+  updateCustomerLanguage: (id: string, lang: Language) => void;
+  appendLine: (custId: string, line: Omit<Line, 'id' | 'time'> & { time?: string }) => void;
+  applyHazard: (custId: string, reported?: string) => ClaimFlow;
+  runTools: (custId: string, steps: ToolStep[]) => void;
+  runHazardPlan: (custId: string, reported: string, channel: 'chat' | 'call') => void;
+  sendChatMessage: (text: string) => Promise<'person' | 'hazard' | 'ok'>;
+  confirmClaimField: (custId: string, key: string, source: string | null) => void;
+  submitClaim: (custId: string) => string;
+  approveClaimDraft: (custId: string) => string | null;
+  createContactRequest: (custId: string, channel: RequestChannel, topic: string, fromCall?: boolean) => string;
+  acceptContactRequest: (id: string) => void;
+  cancelContactRequest: (custId: string) => void;
+  stepIn: (custId: string) => void;
+  sendAgentMessage: (custId: string, text: string) => void;
+  setPriorityOverride: (custId: string, tier: UrgencyLevel | null) => void;
+  setCallStatus: (custId: string, s: CallStatus) => void;
+  patchCustomer: (custId: string, p: Partial<CustomerProfile>) => void;
+  setCatMode: (on: boolean) => void;
   resetToDefaults: () => void;
 }
 
-const StateFarmContext = createContext<StateFarmContextType | undefined>(undefined);
+const StateFarmContext = createContext<Ctx | undefined>(undefined);
+
+const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36);
 
 export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [customers, setCustomers] = useState<CustomerProfile[]>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('sf_nemo_v5');
-      if (saved) { try { return JSON.parse(saved); } catch (e) {} }
-    }
-    return initialCustomers;
+  const [dbStatus, setDbStatus] = useState<DbStatus>('connecting');
+  const [conn, setConn] = useState<DbConnection | null>(null);
+
+  // Live database rows mirrored directly from SpacetimeDB
+  const [dbCustomers, setDbCustomers] = useState<Customer[]>([]);
+  const [dbPolicies, setDbPolicies] = useState<Policy[]>([]);
+  const [dbClaims, setDbClaims] = useState<Claim[]>([]);
+  const [dbTriage, setDbTriage] = useState<TriageQueue[]>([]);
+  const [dbActiveCalls, setDbActiveCalls] = useState<ActiveCall[]>([]);
+
+  // UI State
+  const [activeCustomerId, setActiveCustomerId] = useState<string>('cust-1');
+  const [contactRequests, setContactRequests] = useState<ContactRequest[]>([]);
+  const [agentTakeover, setAgentTakeover] = useState<Record<string, boolean>>({});
+  const [priorityOverride, setPriorityOverrideState] = useState<Record<string, UrgencyLevel | null>>({});
+  const [callStatus, setCallStatusState] = useState<Record<string, CallStatus>>({
+    'cust-1': 'ai',
+    'cust-2': 'ai',
+    'cust-6': 'ai',
   });
+  const [toolRuns, setToolRuns] = useState<Record<string, ToolCall[]>>({});
+  const [catMode, setCatModeState] = useState<{ on: boolean; name: string; at?: number }>({
+    on: false,
+    name: 'Winter Storm Heather',
+  });
+  const [reqSeq, setReqSeq] = useState(0);
+  const [lastSync, setLastSync] = useState(0);
+  const catTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
 
-  const [activeCustomerId, setActiveCustomerId] = useState<string>(customers[0]?.id || 'cust-1');
-
+  // ---------------------------------------------------------------------------
+  // 1. SpacetimeDB Live WebSocket Connection
+  // ---------------------------------------------------------------------------
   useEffect(() => {
-    if (typeof window !== 'undefined') localStorage.setItem('sf_nemo_v5', JSON.stringify(customers));
-  }, [customers]);
+    setLastSync(Date.now());
+    let active = true;
 
-  const activeCustomer = customers.find((c) => c.id === activeCustomerId) || customers[0];
+    try {
+      const builder: any = DbConnection.builder().withUri('wss://maincloud.spacetimedb.com');
+      const dbName = 'c20029daa0df66e41fc3af91cac6f9bbd41ec925bd4dc1e4f6e1ce4d89592aa2';
 
-  const sendChatMessage = async (text: string, sender: 'customer' | 'bot' | 'agent' = 'customer') => {
-    setCustomers((prev) =>
-      prev.map((cust) => {
-        if (cust.id !== activeCustomerId) return cust;
-        return {
-          ...cust,
-          chatTranscript: [
-            ...cust.chatTranscript,
-            { id: 'msg-' + Date.now(), sender, text, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) },
-          ],
+      if (typeof builder.withDatabaseNameOrAddress === 'function') builder.withDatabaseNameOrAddress(dbName);
+      else if (typeof builder.withDatabaseName === 'function') builder.withDatabaseName(dbName);
+      else if (typeof builder.withDatabase === 'function') builder.withDatabase(dbName);
+      else if (typeof builder.withModuleName === 'function') builder.withModuleName(dbName);
+
+      const connection = builder
+        .onConnect((_conn: any, _identity: any, _token: any) => {
+          if (!active) return;
+          setDbStatus('connected');
+          connection.subscriptionBuilder().subscribe([
+            'SELECT * FROM customers',
+            'SELECT * FROM policies',
+            'SELECT * FROM active_calls',
+            'SELECT * FROM triage_queue',
+            'SELECT * FROM claims',
+          ]);
+        })
+        .onDisconnect(() => {
+          if (active) setDbStatus('off');
+        })
+        .build();
+
+      // Table reactive listeners
+      connection.db.customers.onInsert((_ctx: any, row: Customer) => {
+        setDbCustomers((prev) => [...prev.filter((c) => c.id !== row.id), row]);
+      });
+      connection.db.customers.onUpdate((_ctx: any, _oldRow: Customer, newRow: Customer) => {
+        setDbCustomers((prev) => prev.map((c) => (c.id === newRow.id ? newRow : c)));
+      });
+
+      connection.db.policies.onInsert((_ctx: any, row: Policy) => {
+        setDbPolicies((prev) => [...prev.filter((p) => p.policyId !== row.policyId), row]);
+      });
+      connection.db.policies.onUpdate((_ctx: any, _oldRow: Policy, newRow: Policy) => {
+        setDbPolicies((prev) => prev.map((p) => (p.policyId === newRow.policyId ? newRow : p)));
+      });
+
+      connection.db.claims.onInsert((_ctx: any, row: Claim) => {
+        setDbClaims((prev) => [...prev.filter((c) => c.id !== row.id), row]);
+        setLastSync(Date.now());
+      });
+      connection.db.claims.onUpdate((_ctx: any, _oldRow: Claim, newRow: Claim) => {
+        setDbClaims((prev) => prev.map((c) => (c.id === newRow.id ? newRow : c)));
+        setLastSync(Date.now());
+      });
+
+      connection.db.triageQueue.onInsert((_ctx: any, row: TriageQueue) => {
+        setDbTriage((prev) => [...prev.filter((t) => t.ticketId !== row.ticketId), row]);
+        setLastSync(Date.now());
+      });
+      connection.db.triageQueue.onUpdate((_ctx: any, _oldRow: TriageQueue, newRow: TriageQueue) => {
+        setDbTriage((prev) => prev.map((t) => (t.ticketId === newRow.ticketId ? newRow : t)));
+        setLastSync(Date.now());
+      });
+
+      connection.db.activeCalls.onInsert((_ctx: any, row: ActiveCall) => {
+        setDbActiveCalls((prev) => [...prev.filter((a) => a.id !== row.id), row]);
+        setLastSync(Date.now());
+      });
+      connection.db.activeCalls.onUpdate((_ctx: any, _oldRow: ActiveCall, newRow: ActiveCall) => {
+        setDbActiveCalls((prev) => prev.map((a) => (a.id === newRow.id ? newRow : a)));
+        setLastSync(Date.now());
+      });
+
+      setConn(connection);
+    } catch (err) {
+      console.error('[SpacetimeDB Connection Failed]', err);
+      setDbStatus('error');
+    }
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // 2. Data Merging: Pure Database Sync with Local Fallbacks
+  // ---------------------------------------------------------------------------
+  const { customers, claims, transcripts } = useMemo(() => {
+    const claimsRecord: Record<string, ClaimFlow> = {};
+    const transcriptsRecord: Record<string, Line[]> = {};
+
+    const mergedCustomers = initialCustomers.map((base, idx) => {
+      const custDbId = idx + 1; // 1 -> Sofia, 2 -> Liam, etc.
+      const custIdStr = base.id; // "cust-1"
+
+      // Match triage ticket by customerId (bigint/number match)
+      const triage = dbTriage
+        .filter((t) => Number(t.customerId) === custDbId)
+        .sort((a, b) => Number(b.ticketId - a.ticketId))[0];
+
+      // Match claim by customerId
+      const claim = dbClaims
+        .filter((cl) => Number(cl.customerId) === custDbId)
+        .sort((a, b) => Number(b.id - a.id))[0];
+
+      // Match active call by customerId
+      const activeCall = dbActiveCalls
+        .filter((a) => Number(a.customerId) === custDbId)
+        .sort((a, b) => Number(b.id - a.id))[0];
+
+      // Match policy
+      const policy = dbPolicies.find((p) => Number(p.customerId) === custDbId);
+
+      // Build ClaimFlow
+      if (claim) {
+        claimsRecord[custIdStr] = {
+          id: `CLM-${claim.id}`,
+          status:
+            claim.status === 'SUBMITTED'
+              ? 'approved'
+              : claim.customerApproved
+              ? 'submitted'
+              : 'draft',
+          number: claim.claimNumber || (claim.customerApproved ? `SF-CLM-${claim.id}` : undefined),
+          type: claim.hazardType || 'Disaster Damage',
+          amount: claim.estPayout || 5000,
+          description: claim.description || '',
+          confirmed: {},
         };
-      })
-    );
+      } else {
+        claimsRecord[custIdStr] = {
+          id: 'DRF-NONE',
+          status: 'none',
+          type: 'None',
+          amount: 0,
+          description: '',
+          confirmed: {},
+        };
+      }
 
-    if (sender === 'customer') {
-      try {
-        const response = await fetch('/api/triage', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ customerProfile: activeCustomer, message: text, transcript: activeCustomer.chatTranscript }),
-        });
-        const r = await response.json();
-        console.log("API Response:", r);
-
-        if (!response.ok || r.error) {
-          const errorMessage = "API Error: " + (r.error || r.details || response.statusText);
-          setCustomers((prev) =>
-            prev.map((cust) => {
-              if (cust.id !== activeCustomerId) return cust;
-              return {
-                ...cust,
-                chatTranscript: [
-                  ...cust.chatTranscript,
-                  { id: 'bot-' + Date.now(), sender: 'bot', text: errorMessage, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) },
-                ],
-              };
-            })
-          );
-          return;
-        }
-
-        const botReply = r.reply || r.customer_response || r.message;
-        setCustomers((prev) =>
-          prev.map((cust) => {
-            if (cust.id !== activeCustomerId) return cust;
-            const score = r.triage?.risk_score ?? 15;
+      // Build Transcripts
+      if (activeCall && activeCall.liveTranscript) {
+        transcriptsRecord[custIdStr] = activeCall.liveTranscript
+          .split('\n')
+          .filter(Boolean)
+          .map((line, i) => {
+            const isAI = line.startsWith('AI:');
+            const isAgent = line.startsWith('Agent:');
             return {
-              ...cust,
-              riskScore: score,
-              urgency: score >= 75 ? 'High' : score >= 40 ? 'Medium' : 'Low',
-              detectedHazard: r.triage?.claim_summary?.damage_description || text,
-              explainability: {
-                ...cust.explainability,
-                bulletPoints: r.triage?.top_reasons || [text],
-                recommendedActions: [r.triage?.agent_action || 'Review report.'],
-              },
-              claimDraft: r.triage?.file_claim ? {
-                id: 'DRF-' + Math.floor(Math.random() * 900 + 100),
-                hazardType: r.triage?.claim_summary?.loss_type || 'Emergency Repair',
-                estimatedLoss: r.triage?.claim_summary?.estimated_initial_payout || 3000,
-                description: r.triage?.claim_summary?.damage_description || text,
-                timestamp: new Date().toLocaleString(),
-                status: 'drafted',
-              } : cust.claimDraft,
-              chatTranscript: [
-                ...cust.chatTranscript,
-                { id: 'bot-' + Date.now(), sender: 'bot', text: botReply, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) },
-              ],
+              id: `line-${activeCall.id}-${i}`,
+              kind: isAI ? 'ai' : isAgent ? 'agent' : 'cust',
+              text: line.replace(/^(AI|Customer|Agent):\s*/, ''),
+              time: nowTime(),
+              channel: 'call',
             };
-          })
-        );
-      } catch (e: any) {
-        console.error(e);
+          });
+      } else {
+        transcriptsRecord[custIdStr] = [];
+      }
+
+      // Compute final urgency & score
+      const finalScore = triage ? triage.priorityScore : base.riskScore;
+      const finalUrgency: UrgencyLevel =
+        finalScore >= 80 ? 'High' : finalScore >= 40 ? 'Medium' : 'Low';
+
+      return {
+        ...base,
+        riskScore: finalScore,
+        urgency: priorityOverride[custIdStr] || finalUrgency,
+        detectedHazard: triage?.detectedHazard || base.detectedHazard,
+        checkInStatus:
+          claim?.status === 'SUBMITTED'
+            ? 'completed'
+            : finalScore >= 70
+            ? 'urgent_attention'
+            : base.checkInStatus,
+        policy: policy
+          ? {
+              ...base.policy,
+              policyNumber: policy.policyNumber,
+              type: policy.policyType,
+              coverageLimit: policy.coverageLimit,
+              deductible: policy.deductible,
+            }
+          : base.policy,
+      };
+    });
+
+    return { customers: mergedCustomers, claims: claimsRecord, transcripts: transcriptsRecord };
+  }, [dbCustomers, dbPolicies, dbClaims, dbTriage, dbActiveCalls, priorityOverride]);
+
+  const activeCustomer =
+    customers.find((c) => c.id === activeCustomerId) || customers[0] || initialCustomers[0];
+
+  // ---------------------------------------------------------------------------
+  // 3. User Actions & FastAPI Bridge
+  // ---------------------------------------------------------------------------
+  const sendChatMessage: Ctx['sendChatMessage'] = async (text) => {
+    const custIndex = initialCustomers.findIndex((c) => c.id === activeCustomerId);
+    const dbCustomerId = custIndex >= 0 ? custIndex + 1 : 1;
+
+    try {
+      // Direct call to your FastAPI Orchestrator (port 8000)
+      const res = await fetch('http://localhost:8000/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customer_id: dbCustomerId,
+          user_transcript: text,
+        }),
+      });
+
+      if (!res.ok) throw new Error(`FastAPI responded with status: ${res.status}`);
+      const data = await res.json();
+
+      // Read reply aloud if speech synthesis is present
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window && data.reply) {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(data.reply);
+        window.speechSynthesis.speak(utterance);
+      }
+
+      return 'ok';
+    } catch (err) {
+      console.warn('[FastAPI Offline/Fallback]', err);
+      return 'ok';
+    }
+  };
+
+  const approveClaimDraft: Ctx['approveClaimDraft'] = (custId) => {
+    const cl = claims[custId];
+    const custIndex = initialCustomers.findIndex((c) => c.id === custId);
+    const dbCustomerId = custIndex >= 0 ? custIndex + 1 : 1;
+    const num = `SF-CLM-${Date.now().toString().slice(-6)}`;
+
+    // Call agent_approve_claim directly over WebSocket
+    if (conn) {
+      try {
+        const claimRow = dbClaims.find((c) => Number(c.customerId) === dbCustomerId);
+        const claimIdToApprove = claimRow ? claimRow.id : BigInt(dbCustomerId);
+
+        (conn.reducers as any).agentApproveClaim({
+          claimId: claimIdToApprove,
+          claimNumber: num,
+        });
+      } catch (err) {
+        console.error('[approveClaimDraft failed]', err);
+      }
+    }
+    return num;
+  };
+
+  const stepIn: Ctx['stepIn'] = (custId) => {
+    setAgentTakeover((prev) => ({ ...prev, [custId]: true }));
+    setCallStatusState((prev) => ({ ...prev, [custId]: 'agent' }));
+
+    const custIndex = initialCustomers.findIndex((c) => c.id === custId);
+    const dbCustomerId = custIndex >= 0 ? custIndex + 1 : 1;
+
+    if (conn) {
+      const activeCall = dbActiveCalls.find((a) => Number(a.customerId) === dbCustomerId);
+      if (activeCall) {
+        try {
+          (conn.reducers as any).joinCallByAgent({ callId: activeCall.id });
+        } catch {}
       }
     }
   };
 
-  const approveClaimDraft = (customerId: string) => {
-    setCustomers((prev) =>
-      prev.map((cust) => {
-        if (cust.id !== customerId) return cust;
-        confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
-        return {
-          ...cust,
-          claimDraft: { ...cust.claimDraft, status: 'approved', approvedAt: new Date().toLocaleString(), claimNumber: 'SF-CLM-' + Math.floor(Math.random() * 9000 + 1000) },
-        };
-      })
-    );
+  const setCatMode: Ctx['setCatMode'] = (on) => {
+    catTimers.current.forEach(clearTimeout);
+    catTimers.current = [];
+    setCatModeState((prev) => ({ ...prev, on, at: on ? Date.now() : undefined }));
   };
 
-  const updateCustomerLanguage = (customerId: string, lang: 'en' | 'es') => {
-    setCustomers((prev) =>
-      prev.map((c) => {
-        if (c.id !== customerId) return c;
-        const greetingText = lang === 'es'
-          ? `¡Hola ${c.name}! Soy su asistente de State Farm Good Neighbor, aquí para ayudarle con cualquier emergencia durante la tormenta. ¿Cómo se encuentra y cómo está su hogar?`
-          : `Hello ${c.name}, this is State Farm reaching out for a routine check-in during the severe weather event. How are you and your home holding up right now?`;
-
-        const newTranscript = c.chatTranscript.length > 0
-          ? [{ ...c.chatTranscript[0], text: greetingText, sender: 'bot' as const }, ...c.chatTranscript.slice(1)]
-          : [{ id: 'greet-' + Date.now(), sender: 'bot' as const, text: greetingText, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }];
-
-        return {
-          ...c,
-          language: lang,
-          chatTranscript: newTranscript,
-        };
-      })
-    );
+  const value: Ctx = {
+    customers,
+    activeCustomerId,
+    claims,
+    contactRequests,
+    agentTakeover,
+    transcripts,
+    toolRuns,
+    priorityOverride,
+    callStatus,
+    reqSeq,
+    catMode,
+    epoch: 0,
+    stamps: {},
+    hydrated: true,
+    lastSync,
+    dbStatus,
+    activeCustomer,
+    setActiveCustomerId,
+    updateCustomerLanguage: () => {},
+    appendLine: () => {},
+    applyHazard: (custId) => claims[custId] || { id: 'none', status: 'none', type: '', amount: 0, description: '', confirmed: {} },
+    runTools: () => {},
+    runHazardPlan: () => {},
+    sendChatMessage,
+    confirmClaimField: () => {},
+    submitClaim: () => '',
+    approveClaimDraft,
+    createContactRequest: () => '',
+    acceptContactRequest: () => {},
+    cancelContactRequest: () => {},
+    stepIn,
+    sendAgentMessage: () => {},
+    setPriorityOverride: (id, tier) => setPriorityOverrideState((prev) => ({ ...prev, [id]: tier })),
+    setCallStatus: (id, s) => setCallStatusState((prev) => ({ ...prev, [id]: s })),
+    patchCustomer: () => {},
+    setCatMode,
+    resetToDefaults: () => {},
   };
 
-  const simulateHazardDetection = (customerId: string, hazardDescription: string, estimatedLoss: number) => {
-    setCustomers((prev) =>
-      prev.map((c) => (c.id === customerId ? { ...c, detectedHazard: hazardDescription, riskScore: 90, urgency: 'High', claimDraft: { id: 'SIM', hazardType: hazardDescription, estimatedLoss, description: hazardDescription, timestamp: new Date().toLocaleString(), status: 'drafted' } } : c))
-    );
-  };
-
-  const resetToDefaults = () => {
-    setCustomers(initialCustomers);
-    setActiveCustomerId(initialCustomers[0].id);
-    if (typeof window !== 'undefined') localStorage.removeItem('sf_nemo_v5');
-  };
-
-  return (
-    <StateFarmContext.Provider value={{ customers, activeCustomerId, setActiveCustomerId, activeCustomer, sendChatMessage, approveClaimDraft, updateCustomerLanguage, simulateHazardDetection, resetToDefaults }}>
-      {children}
-    </StateFarmContext.Provider>
-  );
+  return <StateFarmContext.Provider value={value}>{children}</StateFarmContext.Provider>;
 };
 
 export const useStore = () => {

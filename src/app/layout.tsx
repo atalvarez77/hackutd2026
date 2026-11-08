@@ -1,41 +1,26 @@
-import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
-import "./globals.css";
-import { StateFarmProvider } from "@/context/StateFarmContext";
-import { Navbar } from "@/components/Navbar";
+import type { Metadata } from 'next';
+import { Source_Sans_3 } from 'next/font/google';
+import './globals.css';
+import { StateFarmProvider } from '@/context/StateFarmContext';
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
+// One plain, readable family for everything (closer to State Farm's own site than a display face).
+const sans = Source_Sans_3({
+  variable: '--font-sans-base',
+  subsets: ['latin'],
+  style: ['normal', 'italic'],
 });
 
 export const metadata: Metadata = {
-  title: "State Farm | Good Neighbor SafetyNet",
-  description: "Proactive Policyholder Welfare & Automated Emergency Hazard Response",
+  title: 'HeyNeighbor · We knock first.',
+  description: 'Nora, State Farm’s AI neighbor: proactive welfare calls, risk triage and pre-filed claims during extreme weather.',
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
-      <body className="min-h-full flex flex-col bg-slate-950 text-slate-100">
-        <StateFarmProvider>
-          <Navbar />
-          <main className="flex-1 flex flex-col">{children}</main>
-        </StateFarmProvider>
+    <html lang="en" className={`${sans.variable} h-full antialiased`}>
+      <body className="min-h-full flex flex-col">
+        <StateFarmProvider>{children}</StateFarmProvider>
       </body>
     </html>
   );
 }
-

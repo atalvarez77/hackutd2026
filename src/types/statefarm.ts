@@ -87,3 +87,54 @@ export interface CustomerProfile {
   claimDraft: ClaimDraft;
   chatTranscript: ChatMessage[];
 }
+
+/* ---------- HeyNeighbor app state ---------- */
+
+/** Claim lifecycle used by the portal, the 8-step claim flow and the agent console. */
+export interface ClaimFlow {
+  id: string; // DRF-xx
+  status: 'none' | 'draft' | 'submitted' | 'approved';
+  number?: string; // SF-CLM-2026-####
+  type: string;
+  amount: number;
+  description: string;
+  /** field key -> where the confirmation came from (e.g. "Confirmed on call with Nora") */
+  confirmed: Record<string, string>;
+  submittedAt?: string;
+  approvedAt?: string;
+}
+
+export type RequestChannel = 'call' | 'text' | 'video' | 'later';
+
+export interface ContactRequest {
+  id: string; // HN-REQ-####
+  custId: string;
+  channel: RequestChannel;
+  topic: string;
+  lang: Language;
+  status: 'waiting' | 'accepted' | 'closed';
+  createdAt: number;
+  position: number;
+  fromCall?: boolean;
+}
+
+export type LineKind = 'ai' | 'cust' | 'agent' | 'event' | 'claim' | 'handoff';
+
+export interface Line {
+  id: string;
+  kind: LineKind;
+  text: string;
+  tr?: string; // English translation of a Spanish line
+  time: string;
+  items?: string[];
+  channel?: 'chat' | 'call';
+  dot?: 'red' | 'lavender' | 'blue';
+}
+
+export interface ToolCall {
+  name: string;
+  output: string;
+  status: 'done' | 'running' | 'queued' | 'paused';
+}
+
+export type CallStatus = 'idle' | 'ringing' | 'ai' | 'agent' | 'ended';
