@@ -1,7 +1,26 @@
 import type { CustomerProfile, UrgencyLevel } from '@/types/statefarm';
 
 /** Hazard keywords (EN + ES). Kept as the offline fallback when Nemotron is unavailable. */
-export const HAZARD_RE = /freez|froze|pipe|cold|agua|helad|congel|tuber/i;
+/** Frozen-pipe reports specifically (gets freeze-specific advice). */
+export const FREEZE_RE = /freez|froze|frozen|pipe|cold|helad|congel|tuber/i;
+/** Any reported damage or danger, for every disaster type (EN/ES). */
+export const HAZARD_RE =
+  /freez|froze|pipe|cold|helad|congel|tuber|damage|broke|flood|water|leak|roof|tree|branch|fire|smoke|burn|hail|wind|shingle|power|outage|\bgas\b|mold|crack|collaps|heat|\bhot\b|\bac\b|a\/c|daño|dañad|inund|agua|gotera|techo|árbol|arbol|rama|fuego|humo|quem|granizo|viento|tejas|apag|sin luz|roto|rota|calor|aire acondicionado/i;
+/** "No damage", "nothing's wrong", "todo bien"... so a reassurance isn't filed as a claim. */
+const NO_HARM_RE = /\b(no|without|zero)\s+(damage|problems?|issues?)\b|nothing('?s| is)?\s+(wrong|damaged|broken)|\ball good\b|sin (daños?|problemas?)|no hay (daños?|problemas?)|todo bien/i;
+/** True when a reply reports damage or danger of any kind. */
+export const reportsHazard = (text: string) => HAZARD_RE.test(text) && !NO_HARM_RE.test(text);
+
+/** Rough disaster category for a free-text report. Order matters: most specific first. */
+const KINDS: { re: RegExp; hazard: string; type: string; amount: number }[] = [
+  { re: FREEZE_RE, hazard: 'Freezing Pipes Hazard', type: 'Water damage: frozen pipe', amount: 3500 },
+  { re: /fire|smoke|burn|fuego|humo|quem/i, hazard: 'Fire or smoke damage', type: 'Fire / smoke damage', amount: 8000 },
+  { re: /flood|water|leak|backup|basement|inund|agua|gotera|sótano|sotano/i, hazard: 'Water or flood damage', type: 'Water damage', amount: 4500 },
+  { re: /tree|branch|árbol|arbol|rama/i, hazard: 'Fallen tree or branch', type: 'Fallen tree damage', amount: 4000 },
+  { re: /roof|hail|wind|shingle|techo|granizo|viento|tejas/i, hazard: 'Roof or wind damage', type: 'Roof / wind damage', amount: 3800 },
+  { re: /power|outage|no power|apag|sin luz/i, hazard: 'Power outage', type: 'Power outage / spoilage', amount: 800 },
+  { re: /heat|\bhot\b|\bac\b|a\/c|calor|aire acondicionado/i, hazard: 'Extreme heat · cooling failure', type: 'Equipment breakdown', amount: 1200 },
+];
 export const PERSON_RE = /person|persona|human|agent|agente|someone|alguien|transfer/i;
 export const OK_RE = /\b(okay|ok|fine|good|safe|bien|todo bien|estoy bien)\b/i;
 export const YES_RE = /\b(yes|yeah|yep|correct|right|sure|submit|do it|s[ií]|claro|correcto|env[ií]e|adelante)\b/i;
@@ -69,13 +88,13 @@ export const isWaterHazard = (h: string) => /pipe|water|flood|backup|seep|tuber|
 
 /** Hazard + claim type a customer's call/chat report maps to. */
 export function hazardFor(c: CustomerProfile, reported?: string) {
-  if (reported && HAZARD_RE.test(reported)) {
-    return { hazard: 'Freezing Pipes Hazard', type: 'Water damage: frozen pipe', amount: 3500 };
-  }
-  const h = c.detectedHazard && c.detectedHazard !== 'None' ? c.detectedHazard : 'Reported storm damage';
+  // What the person actually said wins over what we predicted for them.
+  const k = reported && reportsHazard(reported) ? KINDS.find((x) => x.re.test(reported)) : undefined;
+  if (k) return { hazard: k.hazard, type: k.type, amount: k.amount };
+  const h = c.detectedHazard && c.detectedHazard !== 'None' ? c.detectedHazard : 'Reported property damage';
   return {
     hazard: h,
-    type: c.claimDraft.hazardType && c.claimDraft.hazardType !== 'None' ? c.claimDraft.hazardType : 'Storm damage',
+    type: c.claimDraft.hazardType && c.claimDraft.hazardType !== 'None' ? c.claimDraft.hazardType : 'Property damage',
     amount: c.claimDraft.estimatedLoss || 2500,
   };
 }

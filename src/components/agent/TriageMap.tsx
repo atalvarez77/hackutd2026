@@ -9,12 +9,12 @@ import { COORDS } from '@/lib/hn';
 const C: Record<UrgencyLevel, string> = { High: '#FF3B47', Medium: '#9A93A3', Low: '#4E5A66' };
 const N = 2412;
 
-/** Deterministic fake policyholder locations across DFW. In catastrophe mode more of them rank High. */
-function generatePoints(cat: boolean) {
+/** Deterministic fake policyholder locations across DFW. */
+function generatePoints() {
   let seed = 7;
   const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-  const hi = cat ? 0.19 : 0.07;
-  const med = cat ? 0.5 : 0.3;
+  const hi = 0.07;
+  const med = 0.3;
   return Array.from({ length: N }, () => {
     const lat = 32.62 + rnd() * 0.5;
     const lng = -97.42 + rnd() * 0.98;
@@ -31,7 +31,6 @@ export default function TriageMap({
   customers,
   tierOf,
   selectedId,
-  catOn,
   callLabel,
   onSelect,
   onOpen,
@@ -39,12 +38,11 @@ export default function TriageMap({
   customers: CustomerProfile[];
   tierOf: (c: CustomerProfile) => UrgencyLevel;
   selectedId: string;
-  catOn: boolean;
   callLabel: (c: CustomerProfile) => string;
   onSelect: (id: string) => void;
   onOpen: (id: string) => void;
 }) {
-  const pts = useMemo(() => generatePoints(catOn), [catOn]);
+  const pts = useMemo(() => generatePoints(), []);
   const [shown, setShown] = useState(0);
   const [cardOpen, setCardOpen] = useState(false);
 

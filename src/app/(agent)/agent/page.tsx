@@ -16,7 +16,7 @@ import type { CustomerProfile, UrgencyLevel } from '@/types/statefarm';
 const TriageMap = dynamic(() => import('@/components/agent/TriageMap'), { ssr: false });
 
 const ROW_H = 72;
-const GRID = 'minmax(0,1.3fr) 110px minmax(0,1.4fr) 170px';
+const GRID = 'minmax(0,1.1fr) 96px minmax(0,1.1fr) 150px minmax(0,1.5fr)';
 // Events in the transcript: one accent for things that need attention, neutral otherwise.
 const DOT = { red: '#FF6B73', lavender: '#6E6878', blue: '#8FC3DD' } as const;
 
@@ -33,7 +33,7 @@ export default function AgentConsolePage() {
   const [panelOpen, setPanelOpen] = useState(false);
   const [msg, setMsg] = useState('');
   const [toast, setToast] = useState<string | null>(null);
-  const [catAsk, setCatAsk] = useState(false);
+  const [help, setHelp] = useState(false);
   const storeRef = useRef(store);
   storeRef.current = store;
 
@@ -113,6 +113,56 @@ export default function AgentConsolePage() {
     showToast(`${num} approved and dispatched`);
   };
 
+  /** Latest thing that happened for this person, for the queue row. */
+  const lastChange = (id: string) => {
+    const ls = transcripts[id] || [];
+    for (let i = ls.length - 1; i >= 0; i--) {
+      const l = ls[i];
+      if (l.kind === 'handoff' || l.kind === 'claim') continue;
+      const who = l.kind === 'ai' ? 'Nora: ' : l.kind === 'agent' ? 'You: ' : l.kind === 'cust' ? first(customers.find((x) => x.id === id)?.name || '') + ': ' : '';
+      return `${l.time} · ${who}${l.tr || l.text}`;
+    }
+    return '';
+  };
+
+  /* ---- Keyboard: J/K move, S step in, A approve, M map, Q queue, ? help ---- */
+  const keyRef = useRef<(e: KeyboardEvent) => void>(() => {});
+  keyRef.current = (e: KeyboardEvent) => {
+    const el = e.target as HTMLElement;
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT')) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const k = e.key.toLowerCase();
+    const i = vis.findIndex((x) => x.id === sel);
+    if (k === 'j' || k === 'arrowdown') {
+      const n = vis[Math.min(vis.length - 1, i + 1)];
+      if (n) setSel(n.id);
+    } else if (k === 'k' || k === 'arrowup') {
+      const n = vis[Math.max(0, i - 1)];
+      if (n) setSel(n.id);
+    } else if (k === 's') {
+      if (!agentTakeover[sel]) {
+        if (!(callStatus[sel] === 'ai' || callStatus[sel] === 'agent')) store.setCallStatus(sel, 'agent');
+        store.stepIn(sel);
+      }
+    } else if (k === 'a') {
+      const num = store.approveClaimDraft(sel);
+      if (num) showToast(`${num} approved and dispatched`);
+    } else if (k === 'm') setView('map');
+    else if (k === 'q') setView('queue');
+    else if (k === 'd') setPanelOpen((o) => !o);
+    else if (k === '?') setHelp((h) => !h);
+    else if (k === 'escape') {
+      setHelp(false);
+      setPanelOpen(false);
+    } else return;
+    e.preventDefault();
+  };
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => keyRef.current(e);
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, []);
+
   const callText = (x: CustomerProfile): [string, string, boolean] => {
     const rq = contactRequests.find((r) => r.custId === x.id && r.status === 'waiting');
     if (rq) return ['Wants a person', '#FF6B73', true];
@@ -160,10 +210,11 @@ export default function AgentConsolePage() {
           setFilter(v === 'drafts' ? 'Drafts' : 'All');
         }}
         draftCount={counts.Drafts}
-        catOn={store.catMode.on}
-        onCat={() => (store.catMode.on ? store.setCatMode(false) : setCatAsk(true))}
+        onHelp={() => setHelp(true)}
         lastSync={store.lastSync}
         dbStatus={store.dbStatus}
+        apiStatus={store.apiStatus}
+        aiSource={store.aiSource}
         customers={customers}
         actingAs={activeCustomerId}
         onActingAs={(id) => {
@@ -175,20 +226,6 @@ export default function AgentConsolePage() {
           showToast('Demo data restored');
         }}
       />
-
-      {store.catMode.on && (
-        <div className="flex-none flex items-center gap-3 px-6 py-2.5 bg-[#2A1416] border-b border-white/[.08] text-[15px]">
-          <Dot color="#FF6B73" />
-          <span className="font-semibold">Catastrophe mode · {store.catMode.name}</span>
-          <span className="text-mist">
-            Nora is calling everyone in the zone, highest risk first · {Object.values(callStatus).filter((v) => v === 'ai').length} on calls now
-          </span>
-          <span className="flex-1" />
-          <button onClick={() => store.setCatMode(false)} className="h-8 px-3 rounded-md border border-white/[.16] bg-transparent text-ink text-[14px] cursor-pointer">
-            End
-          </button>
-        </div>
-      )}
 
       {/* Request strip */}
       {waitingReqs.length > 0 && (
@@ -235,9 +272,12 @@ export default function AgentConsolePage() {
               customers={customers}
               tierOf={tier}
               selectedId={c.id}
-              catOn={store.catMode.on}
               callLabel={(x) => callText(x)[0]}
-              onSelect={(id) => setSel(id)}
+              onSelect={(id) => {
+                setSel(id);
+                // Picking someone on the map also switches the portal to them (same as "Portal user").
+                store.setActiveCustomerId(id);
+              }}
               onOpen={(id) => {
                 setSel(id);
                 setView('queue');
@@ -270,6 +310,7 @@ export default function AgentConsolePage() {
                 <div>Priority</div>
                 <div>Situation</div>
                 <div>Call</div>
+                <div>Latest</div>
               </div>
               <div className="flex-1 overflow-auto">
                 <div className="relative" style={{ height: vis.length * ROW_H }}>
@@ -319,6 +360,9 @@ export default function AgentConsolePage() {
                         <div className="flex items-center gap-2 text-[14px] whitespace-nowrap overflow-hidden" style={{ color: stc }}>
                           {pulse && <Dot color={stc === '#FF6B73' ? stc : '#8FC3DD'} />}
                           {st}
+                        </div>
+                        <div className="min-w-0 text-[13px] text-[#8A8494] truncate" title={lastChange(x.id)}>
+                          {lastChange(x.id)}
                         </div>
                       </div>
                     );
@@ -601,29 +645,23 @@ export default function AgentConsolePage() {
         )}
       </div>
 
-      {catAsk && (
-        <div className="fixed inset-0 z-40 bg-black/60 flex items-center justify-center p-4" onClick={() => setCatAsk(false)}>
-          <div className="w-full max-w-[460px] rounded-xl bg-panel border border-white/[.1] p-6 flex flex-col gap-4" onClick={(e) => e.stopPropagation()}>
-            <div className="text-[20px] font-semibold">Declare a catastrophe event?</div>
-            <p className="m-0 text-[15px] text-mist leading-relaxed">
-              Nora will start calling every policyholder in the {store.catMode.name} zone right away, highest risk first. Anyone who reports damage or presses 1 for a
-              person comes to this queue. The policyholder portal shows a storm notice.
-            </p>
-            <div className="flex justify-end gap-2">
-              <button onClick={() => setCatAsk(false)} className="h-10 px-4 rounded-lg border border-white/[.14] bg-transparent text-ink cursor-pointer">
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  setCatAsk(false);
-                  store.setCatMode(true);
-                  showToast('Catastrophe mode on · Nora is dialing');
-                }}
-                className="h-10 px-4 rounded-lg bg-sf-red text-white font-semibold cursor-pointer"
-              >
-                Activate
-              </button>
-            </div>
+      {help && (
+        <div className="fixed inset-0 z-40 bg-black/60 flex items-center justify-center p-4" onClick={() => setHelp(false)}>
+          <div className="w-full max-w-[380px] rounded-xl bg-panel border border-white/[.1] p-6 flex flex-col gap-3" onClick={(e) => e.stopPropagation()}>
+            <div className="text-[18px] font-semibold">Keyboard shortcuts</div>
+            {[
+              ['J / K', 'Next / previous policyholder'],
+              ['S', 'Step in on the call'],
+              ['A', 'Approve claim & dispatch'],
+              ['D', 'Details panel'],
+              ['M / Q', 'Map / queue'],
+              ['?', 'This list'],
+            ].map(([k, v]) => (
+              <div key={k} className="flex items-center gap-3 text-[15px]">
+                <span className="min-w-[56px] text-center px-2 py-0.5 rounded-md bg-panel-2 border border-white/[.1] font-mono text-[13px]">{k}</span>
+                <span className="text-mist">{v}</span>
+              </div>
+            ))}
           </div>
         </div>
       )}
