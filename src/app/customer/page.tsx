@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useStore } from '@/context/StateFarmContext';
 import { Bot, User, Phone, PhoneOff, Globe, Send, ShieldAlert } from 'lucide-react';
 
@@ -8,6 +8,16 @@ export default function CustomerPortalPage() {
   const { activeCustomer, sendChatMessage, updateCustomerLanguage } = useStore();
   const [inputText, setInputText] = useState('');
   const [callActive, setCallActive] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!mounted) {
+    return <div className="flex flex-col flex-1 bg-slate-950 text-slate-100 max-w-7xl mx-auto w-full px-4 py-8" />;
+  }
+
   const isSpanish = activeCustomer.language === 'es';
 
   return (
@@ -79,3 +89,4 @@ export default function CustomerPortalPage() {
     </div>
   );
 }
+

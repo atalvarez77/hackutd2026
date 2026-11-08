@@ -10,7 +10,7 @@ interface StateFarmContextType {
   activeCustomerId: string;
   setActiveCustomerId: (id: string) => void;
   activeCustomer: CustomerProfile;
-  sendChatMessage: (text: string, sender?: 'customer' | 'bot' | 'agent') => void;
+  sendChatMessage: (text: string, sender?: 'customer' | 'bot' | 'agent') => Promise<void>;
   approveClaimDraft: (customerId: string) => void;
   updateCustomerLanguage: (customerId: string, lang: 'en' | 'es') => void;
   simulateHazardDetection: (customerId: string, hazardDescription: string, estimatedLoss: number) => void;
@@ -22,7 +22,7 @@ const StateFarmContext = createContext<StateFarmContextType | undefined>(undefin
 export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [customers, setCustomers] = useState<CustomerProfile[]>(() => {
     if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('sf_v8');
+      const saved = localStorage.getItem('sf_nemo_v5');
       if (saved) { try { return JSON.parse(saved); } catch (e) {} }
     }
     return initialCustomers;
@@ -31,58 +31,86 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [activeCustomerId, setActiveCustomerId] = useState<string>(customers[0]?.id || 'cust-1');
 
   useEffect(() => {
-    if (typeof window !== 'undefined') localStorage.setItem('sf_v8', JSON.stringify(customers));
+    if (typeof window !== 'undefined') localStorage.setItem('sf_nemo_v5', JSON.stringify(customers));
   }, [customers]);
 
   const activeCustomer = customers.find((c) => c.id === activeCustomerId) || customers[0];
 
-  const sendChatMessage = (text: string, sender: 'customer' | 'bot' | 'agent' = 'customer') => {
+  const sendChatMessage = async (text: string, sender: 'customer' | 'bot' | 'agent' = 'customer') => {
     setCustomers((prev) =>
       prev.map((cust) => {
         if (cust.id !== activeCustomerId) return cust;
-        const newMsg = {
-          id: 'msg-' + Date.now(),
-          sender,
-          text,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        };
-        const updatedTranscript = [...cust.chatTranscript, newMsg];
-        let updatedHazard = cust.detectedHazard;
-        let updatedRisk = cust.riskScore;
-        let updatedUrgency = cust.urgency;
-        let updatedDraft = { ...cust.claimDraft };
-
-        if (text.toLowerCase().match(/freeze|pipe|cold|agua|helada|frio|fregadero|banging/i) && sender === 'customer') {
-          updatedHazard = 'Freezing Pipes Hazard';
-          updatedRisk = Math.min(98, cust.riskScore + 10);
-          updatedUrgency = 'High';
-          updatedDraft = {
-            id: 'DRF-99',
-            hazardType: 'Winter Freeze Plumbing Emergency',
-            estimatedLoss: 3500,
-            description: `Automated detection: "${text}"`,
-            timestamp: new Date().toLocaleString(),
-            status: 'drafted',
-          };
-          updatedTranscript.push({
-            id: 'msg-w-' + Date.now(),
-            sender: 'bot',
-            text: cust.language === 'es' ? '⚠️ Reclamo por $3,500 creado para plomero.' : '⚠️ Pre-filed claim draft for $3,500 created.',
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          });
-        }
-
         return {
           ...cust,
-          chatTranscript: updatedTranscript,
-          detectedHazard: updatedHazard,
-          riskScore: updatedRisk,
-          urgency: updatedUrgency,
-          claimDraft: updatedDraft,
-          checkInStatus: 'urgent_attention',
+          chatTranscript: [
+            ...cust.chatTranscript,
+            { id: 'msg-' + Date.now(), sender, text, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) },
+          ],
         };
       })
     );
+
+    if (sender === 'customer') {
+      try {
+        const response = await fetch('/api/triage', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ customerProfile: activeCustomer, message: text, transcript: activeCustomer.chatTranscript }),
+        });
+        const r = await response.json();
+        console.log("API Response:", r);
+
+        if (!response.ok || r.error) {
+          const errorMessage = "API Error: " + (r.error || r.details || response.statusText);
+          setCustomers((prev) =>
+            prev.map((cust) => {
+              if (cust.id !== activeCustomerId) return cust;
+              return {
+                ...cust,
+                chatTranscript: [
+                  ...cust.chatTranscript,
+                  { id: 'bot-' + Date.now(), sender: 'bot', text: errorMessage, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) },
+                ],
+              };
+            })
+          );
+          return;
+        }
+
+        const botReply = r.reply || r.customer_response || r.message;
+        setCustomers((prev) =>
+          prev.map((cust) => {
+            if (cust.id !== activeCustomerId) return cust;
+            const score = r.triage?.risk_score ?? 15;
+            return {
+              ...cust,
+              riskScore: score,
+              urgency: score >= 75 ? 'High' : score >= 40 ? 'Medium' : 'Low',
+              detectedHazard: r.triage?.claim_summary?.damage_description || text,
+              explainability: {
+                ...cust.explainability,
+                bulletPoints: r.triage?.top_reasons || [text],
+                recommendedActions: [r.triage?.agent_action || 'Review report.'],
+              },
+              claimDraft: r.triage?.file_claim ? {
+                id: 'DRF-' + Math.floor(Math.random() * 900 + 100),
+                hazardType: r.triage?.claim_summary?.loss_type || 'Emergency Repair',
+                estimatedLoss: r.triage?.claim_summary?.estimated_initial_payout || 3000,
+                description: r.triage?.claim_summary?.damage_description || text,
+                timestamp: new Date().toLocaleString(),
+                status: 'drafted',
+              } : cust.claimDraft,
+              chatTranscript: [
+                ...cust.chatTranscript,
+                { id: 'bot-' + Date.now(), sender: 'bot', text: botReply, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) },
+              ],
+            };
+          })
+        );
+      } catch (e: any) {
+        console.error(e);
+      }
+    }
   };
 
   const approveClaimDraft = (customerId: string) => {
@@ -92,50 +120,43 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
         return {
           ...cust,
-          claimDraft: {
-            ...cust.claimDraft,
-            status: 'approved',
-            approvedAt: new Date().toLocaleString(),
-            claimNumber: 'SF-CLM-2026-' + Math.floor(Math.random() * 9000 + 1000),
-            adjusterNotes: 'Approved via 1-click FastTrack workflow.',
-          },
-          checkInStatus: 'completed',
+          claimDraft: { ...cust.claimDraft, status: 'approved', approvedAt: new Date().toLocaleString(), claimNumber: 'SF-CLM-' + Math.floor(Math.random() * 9000 + 1000) },
         };
       })
     );
   };
 
   const updateCustomerLanguage = (customerId: string, lang: 'en' | 'es') => {
-    setCustomers((prev) => prev.map((c) => (c.id === customerId ? { ...c, language: lang } : c)));
+    setCustomers((prev) =>
+      prev.map((c) => {
+        if (c.id !== customerId) return c;
+        const greetingText = lang === 'es'
+          ? `¡Hola ${c.name}! Soy su asistente de State Farm Good Neighbor, aquí para ayudarle con cualquier emergencia durante la tormenta. ¿Cómo se encuentra y cómo está su hogar?`
+          : `Hello ${c.name}, this is State Farm reaching out for a routine check-in during the severe weather event. How are you and your home holding up right now?`;
+
+        const newTranscript = c.chatTranscript.length > 0
+          ? [{ ...c.chatTranscript[0], text: greetingText, sender: 'bot' as const }, ...c.chatTranscript.slice(1)]
+          : [{ id: 'greet-' + Date.now(), sender: 'bot' as const, text: greetingText, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }];
+
+        return {
+          ...c,
+          language: lang,
+          chatTranscript: newTranscript,
+        };
+      })
+    );
   };
 
   const simulateHazardDetection = (customerId: string, hazardDescription: string, estimatedLoss: number) => {
     setCustomers((prev) =>
-      prev.map((c) => {
-        if (c.id !== customerId) return c;
-        return {
-          ...c,
-          detectedHazard: hazardDescription,
-          riskScore: 95,
-          urgency: 'High',
-          checkInStatus: 'urgent_attention',
-          claimDraft: {
-            id: 'DRF-SIM',
-            hazardType: hazardDescription,
-            estimatedLoss,
-            description: `Simulation: ${hazardDescription}`,
-            timestamp: new Date().toLocaleString(),
-            status: 'drafted',
-          },
-        };
-      })
+      prev.map((c) => (c.id === customerId ? { ...c, detectedHazard: hazardDescription, riskScore: 90, urgency: 'High', claimDraft: { id: 'SIM', hazardType: hazardDescription, estimatedLoss, description: hazardDescription, timestamp: new Date().toLocaleString(), status: 'drafted' } } : c))
     );
   };
 
   const resetToDefaults = () => {
     setCustomers(initialCustomers);
     setActiveCustomerId(initialCustomers[0].id);
-    if (typeof window !== 'undefined') localStorage.removeItem('sf_v8');
+    if (typeof window !== 'undefined') localStorage.removeItem('sf_nemo_v5');
   };
 
   return (

@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ShieldCheck, UserCheck, LayoutDashboard, Home, RotateCcw } from 'lucide-react';
@@ -9,9 +9,13 @@ import { useStore } from '@/context/StateFarmContext';
 export const Navbar: React.FC = () => {
   const pathname = usePathname();
   const { customers, activeCustomer, setActiveCustomerId, resetToDefaults } = useStore();
+  const [mounted, setMounted] = useState(false);
 
-  const highRiskCount = customers.filter((c) => c.urgency === 'High').length;
-  const pendingDraftsCount = customers.filter((c) => c.claimDraft.status === 'drafted').length;
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  const pendingDraftsCount = mounted ? customers.filter((c) => c.claimDraft.status === 'drafted').length : 0;
 
   return (
     <header className="sticky top-0 z-50 bg-slate-900 border-b border-slate-800 text-white shadow-xl">
@@ -60,7 +64,7 @@ export const Navbar: React.FC = () => {
           >
             <LayoutDashboard className="w-4 h-4" />
             Agent Dashboard
-            {pendingDraftsCount > 0 && (
+            {mounted && pendingDraftsCount > 0 && (
               <span className="absolute -top-1 -right-1 bg-amber-500 text-slate-950 text-xs font-bold w-5 h-5 rounded-full flex items-center justify-center shadow">
                 {pendingDraftsCount}
               </span>
@@ -70,20 +74,22 @@ export const Navbar: React.FC = () => {
 
         {/* Active Customer Switcher & Reset */}
         <div className="flex items-center gap-3">
-          <div className="hidden lg:flex flex-col items-end">
-            <span className="text-xs text-slate-400">Simulated Policyholder:</span>
-            <select
-              value={activeCustomer.id}
-              onChange={(e) => setActiveCustomerId(e.target.value)}
-              className="bg-slate-800 border border-slate-700 text-xs text-slate-200 rounded-lg px-2.5 py-1 focus:outline-none focus:border-red-500 cursor-pointer"
-            >
-              {customers.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name} ({c.age}yo, {c.language.toUpperCase()}) - Risk: {c.riskScore}
-                </option>
-              ))}
-            </select>
-          </div>
+          {mounted && (
+            <div className="hidden lg:flex flex-col items-end">
+              <span className="text-xs text-slate-400">Simulated Policyholder:</span>
+              <select
+                value={activeCustomer.id}
+                onChange={(e) => setActiveCustomerId(e.target.value)}
+                className="bg-slate-800 border border-slate-700 text-xs text-slate-200 rounded-lg px-2.5 py-1 focus:outline-none focus:border-red-500 cursor-pointer"
+              >
+                {customers.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} ({c.age}yo, {c.language.toUpperCase()})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <button
             onClick={() => {
@@ -101,4 +107,5 @@ export const Navbar: React.FC = () => {
     </header>
   );
 };
+
 
