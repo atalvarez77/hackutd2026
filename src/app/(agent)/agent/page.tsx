@@ -213,6 +213,8 @@ export default function AgentConsolePage() {
         onHelp={() => setHelp(true)}
         lastSync={store.lastSync}
         dbStatus={store.dbStatus}
+        apiStatus={store.apiStatus}
+        aiSource={store.aiSource}
         customers={customers}
         actingAs={activeCustomerId}
         onActingAs={(id) => {

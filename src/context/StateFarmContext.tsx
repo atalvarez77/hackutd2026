@@ -16,6 +16,9 @@ import type {
 import { first, FREEZE_RE, hazardFor, nowTime, reportsHazard } from '@/lib/hn';
 import { DbConnection } from '@/module_bindings';
 import type { ActiveCall, Claim, Customer, Policy, TriageQueue } from '@/module_bindings/types';
+import { apiState, checkHealth, onApiChange, post, type AiSource, type ApiStatus, type TurnResult } from '@/lib/backend';
+
+export type { TurnResult } from '@/lib/backend';
 
 /**
  * Data model
@@ -24,9 +27,13 @@ import type { ActiveCall, Claim, Customer, Policy, TriageQueue } from '@/module_
  * mirrored live from the tables and merged over the mock profiles. Only rows tied to a customer's
  * *open* call count, so a finished call (end_call) never leaks into the next one.
  *
- * Chat turns go to the FastAPI orchestrator (backend/main.py), which runs Nemotron and writes the
- * transcript, triage ticket and claim itself. If it isn't running we fall back to the Next.js
- * Nemotron route, then to an offline reply.
+ * The FastAPI orchestrator (backend/main.py) is the foundation: every caller turn, on the phone or
+ * by text, goes through POST /api/chat. It runs Nemotron triage and writes the transcript, triage
+ * ticket and claim. Every other write (Nora's lines, the agent, step-in, hang-up, consent,
+ * approval) goes through its gateway endpoints too. Only while it's unreachable does the browser
+ * write to SpacetimeDB directly. Until the team's nemotron_service.py exists the orchestrator
+ * runs a stub, so Nora speaks her scripted lines; once it reports ai_source "nemotron" she
+ * speaks the orchestrator's reply instead.
  *
  * Things the database doesn't model (transfer requests, agent takeover, claim confirmations, the
  * running tool list, language, events in the transcript) live in a small UI layer that is saved to
@@ -38,7 +45,6 @@ import type { ActiveCall, Claim, Customer, Policy, TriageQueue } from '@/module_
 const DB_URI = process.env.NEXT_PUBLIC_SPACETIME_URI || 'wss://maincloud.spacetimedb.com';
 const DB_NAME = process.env.NEXT_PUBLIC_SPACETIME_DB || 'c20029daa0df66e41fc3af91cac6f9bbd41ec925bd4dc1e4f6e1ce4d89592aa2';
 const DB_ENABLED = process.env.NEXT_PUBLIC_SPACETIME !== 'off';
-const ORCHESTRATOR = process.env.NEXT_PUBLIC_ORCHESTRATOR_URL || 'http://localhost:8000';
 
 const KEY = 'hn_ui_v1';
 const CHANNEL = 'hn_demo';
@@ -240,9 +246,17 @@ interface Ctx extends AppState {
   updateCustomerLanguage: (id: string, lang: Language) => void;
   /** `synced`: the line is already in the database (e.g. written by the orchestrator). */
   appendLine: (custId: string, line: Omit<Line, 'id' | 'time'> & { time?: string }, opts?: { synced?: boolean }) => void;
-  applyHazard: (custId: string, reported?: string) => ClaimFlow;
+  applyHazard: (custId: string, reported?: string, turn?: TurnResult | null) => ClaimFlow;
   runTools: (custId: string, steps: ToolStep[]) => void;
-  runHazardPlan: (custId: string, reported: string, channel: 'chat' | 'call') => void;
+  runHazardPlan: (custId: string, reported: string, channel: 'chat' | 'call', turn?: TurnResult | null) => void;
+  /**
+   * One thing the caller said (call or chat): logs it and sends it through FastAPI /api/chat.
+   * Resolves to the orchestrator's triage/claim result, or null if it's unreachable.
+   */
+  customerTurn: (custId: string, text: string, opts: { channel: 'call' | 'chat'; stage?: string; tr?: string }) => Promise<TurnResult | null>;
+  /** FastAPI orchestrator reachability and whether it runs real Nemotron or its stub. */
+  apiStatus: ApiStatus;
+  aiSource: AiSource | null;
   sendChatMessage: (text: string) => Promise<'person' | 'hazard' | 'ok'>;
   confirmClaimField: (custId: string, key: string, source: string | null) => void;
   submitClaim: (custId: string) => string;
@@ -278,6 +292,16 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const bc = useRef<BroadcastChannel | null>(null);
   /** Call id this tab started for a customer before the database echoed it back. */
   const pendingCall = useRef<Record<string, bigint>>({});
+  /** Per-customer queue so transcript writes reach the orchestrator in the order they were said. */
+  const writeQueue = useRef<Record<string, Promise<unknown>>>({});
+  const [api, setApi] = useState(apiState);
+
+  // FastAPI orchestrator health (re-checked automatically while it's down).
+  useEffect(() => {
+    const off = onApiChange(() => setApi(apiState()));
+    void checkHealth();
+    return off;
+  }, []);
 
   // 1. SpacetimeDB live connection (one per tab).
   useEffect(() => {
@@ -499,16 +523,68 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     );
   };
 
+  /* ---------------- Writes: FastAPI first, SpacetimeDB directly as the fallback ---------------- */
+  const queued = <T,>(custId: string, fn: () => Promise<T>): Promise<T> => {
+    const next = (writeQueue.current[custId] || Promise.resolve()).then(fn, fn);
+    writeQueue.current[custId] = next.catch(() => {});
+    return next;
+  };
+  const ref = (custId: string) => {
+    const s = session(custId);
+    return { customer_id: Number(s.customerId), call_id: Number(s.callId) };
+  };
+  const adopt = (custId: string, r: { call_id?: number } | null) => {
+    if (r?.call_id && !live.current.openCall[custId]) pendingCall.current[custId] = BigInt(r.call_id);
+  };
+  const writeLine = (custId: string, who: 'Customer' | 'AI' | 'Agent', text: string) =>
+    void queued(custId, async () => {
+      const r = await post<{ ok: boolean; call_id: number }>('/api/transcript', { ...ref(custId), speaker: who, text });
+      adopt(custId, r);
+      if (r?.ok) return;
+      const c = live.current.conn;
+      if (c) {
+        const s = session(custId);
+        dbCall(c.reducers.updateCallTranscript({ callId: s.callId, customerId: s.customerId, transcriptChunk: `${who}: ${text}` }));
+      }
+    });
+  const writeTriage = (custId: string, score: number, category: string, reason: string, hazard: string) =>
+    void queued(custId, async () => {
+      const r = await post<{ ok: boolean }>('/api/triage', { ...ref(custId), priority_score: score, category, summary_reason: reason, detected_hazard: hazard });
+      const c = live.current.conn;
+      if (!r?.ok && c) {
+        const s = session(custId);
+        dbCall(
+          c.reducers.updateTriageScore({
+            ticketId: s.ticketId,
+            customerId: s.customerId,
+            callId: s.callId,
+            priorityScore: Math.max(0, Math.min(100, Math.round(score))),
+            category,
+            summaryReason: reason,
+            detectedHazard: hazard,
+          }),
+        );
+      }
+    });
+  const writeClaim = (custId: string, cl: ClaimFlow, customerApproved: boolean) =>
+    void queued(custId, async () => {
+      const r = await post<{ ok: boolean }>('/api/claim', {
+        ...ref(custId),
+        description: cl.description,
+        hazard_type: cl.type,
+        est_payout: cl.amount,
+        customer_approved: customerApproved,
+      });
+      if (!r?.ok) pushClaim(custId, cl, customerApproved);
+    });
+
   /* ---------------- Actions ---------------- */
   const patchCustomer: Ctx['patchCustomer'] = (custId, p) =>
     update((s) => touch({ ...s, patches: { ...s.patches, [custId]: { ...s.patches[custId], ...p } } }, 'cu:' + custId));
 
   const appendLine: Ctx['appendLine'] = (custId, line, opts) => {
-    const c = live.current.conn;
-    if (c && !opts?.synced && (line.kind === 'cust' || line.kind === 'ai' || line.kind === 'agent') && line.text) {
-      const who = line.kind === 'cust' ? 'Customer' : line.kind === 'ai' ? 'AI' : 'Agent';
-      const s = session(custId);
-      dbCall(c.reducers.updateCallTranscript({ callId: s.callId, customerId: s.customerId, transcriptChunk: `${who}: ${line.text}` }));
+    if (!opts?.synced && (line.kind === 'cust' || line.kind === 'ai' || line.kind === 'agent') && line.text) {
+      writeLine(custId, line.kind === 'cust' ? 'Customer' : line.kind === 'ai' ? 'AI' : 'Agent', line.text);
     }
     update((s) => ({
       ...s,
@@ -516,15 +592,50 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }));
   };
 
-  const applyHazard: Ctx['applyHazard'] = (custId, reported) => {
+  const customerTurn: Ctx['customerTurn'] = async (custId, text, opts) => {
+    // Logged locally now; the orchestrator writes it to the transcript as part of the turn.
+    appendLine(custId, { kind: 'cust', text, channel: opts.channel, tr: opts.tr }, { synced: true });
+    const turn = await queued(custId, () =>
+      post<TurnResult>('/api/chat', { ...ref(custId), user_transcript: text, stage: opts.stage, scripted: true }, 9000),
+    );
+    if (!turn) {
+      // Orchestrator unreachable: write the caller's line ourselves.
+      const c = live.current.conn;
+      if (c) {
+        const s = session(custId);
+        dbCall(c.reducers.updateCallTranscript({ callId: s.callId, customerId: s.customerId, transcriptChunk: `Customer: ${text}` }));
+      }
+      return null;
+    }
+    adopt(custId, turn);
+    // The orchestrator's triage is the ranking the console shows.
+    if (typeof turn.priority_score === 'number') {
+      const hz = turn.detected_hazard && turn.detected_hazard !== 'None' ? turn.detected_hazard : undefined;
+      patchCustomer(custId, { riskScore: turn.priority_score, urgency: tierOf(turn.priority_score), ...(hz ? { detectedHazard: hz } : {}) });
+    }
+    return turn;
+  };
+
+  const applyHazard: Ctx['applyHazard'] = (custId, reported, turn) => {
     const c = cust(custId);
-    const h = hazardFor(c, reported);
+    const local = hazardFor(c, reported);
+    // Prefer what the orchestrator decided; it has already written triage + claim to the database.
+    const h = turn?.claim
+      ? { hazard: turn.detected_hazard || local.hazard, type: turn.claim.hazard_type, amount: turn.claim.est_payout }
+      : local;
     const existing = live.current.claims[custId];
     const claim: ClaimFlow =
       existing && existing.status !== 'none'
         ? existing
-        : { id: 'DRF-99', status: 'draft', type: h.type, amount: h.amount, description: `Reported by policyholder: ${reported || h.hazard}`, confirmed: {} };
-    const score = Math.min(98, c.riskScore + 10);
+        : {
+            id: 'DRF-99',
+            status: 'draft',
+            type: h.type,
+            amount: h.amount,
+            description: turn?.claim?.description || `Reported by policyholder: ${reported || h.hazard}`,
+            confirmed: {},
+          };
+    const score = typeof turn?.priority_score === 'number' ? turn.priority_score : Math.min(98, c.riskScore + 10);
     update((s) =>
       touch(
         {
@@ -535,21 +646,10 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         'cu:' + custId,
       ),
     );
-    const conn0 = live.current.conn;
-    if (conn0) {
-      const s = session(custId);
-      dbCall(
-        conn0.reducers.updateTriageScore({
-          ticketId: s.ticketId,
-          customerId: s.customerId,
-          callId: s.callId,
-          priorityScore: score,
-          category: h.type,
-          summaryReason: `Reported by policyholder: ${reported || h.hazard}`,
-          detectedHazard: h.hazard,
-        }),
-      );
-      if (claim !== existing) pushClaim(custId, claim, false);
+    // If the orchestrator's turn didn't produce triage + claim itself, send them through it now.
+    if (!turn?.claim) {
+      writeTriage(custId, score, h.type, `Reported by policyholder: ${reported || h.hazard}`, h.hazard);
+      if (claim !== existing) writeClaim(custId, claim, false);
     }
     return claim;
   };
@@ -572,11 +672,13 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   };
 
   /** Default Nemotron plan for a hazard: risk → claim → emergency contact. */
-  const hazardPlan = (custId: string, reported: string, channel: 'chat' | 'call'): ToolStep[] => {
+  const hazardPlan = (custId: string, reported: string, channel: 'chat' | 'call', turn?: TurnResult | null): ToolStep[] => {
     const c = cust(custId);
-    const h = hazardFor(c, reported);
+    const local = hazardFor(c, reported);
+    const h = turn?.claim ? { hazard: turn.detected_hazard || local.hazard, type: turn.claim.hazard_type, amount: turn.claim.est_payout } : local;
+    const to = typeof turn?.priority_score === 'number' ? turn.priority_score : Math.min(98, c.riskScore + 10);
     return [
-      { name: 'assess_risk_and_update_score', output: `risk ${c.riskScore} → ${Math.min(98, c.riskScore + 10)} · ${h.hazard}`, effect: () => applyHazard(custId, reported) },
+      { name: 'assess_risk_and_update_score', output: `risk ${c.riskScore} → ${to} · ${h.hazard}`, effect: () => applyHazard(custId, reported, turn) },
       { name: 'auto_file_claim', output: `DRF-99 · ${h.type} · $${h.amount.toLocaleString()}`, effect: () => appendLine(custId, { kind: 'claim', text: '', channel }) },
       {
         name: 'trigger_emergency_contact',
@@ -586,42 +688,9 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     ];
   };
 
-  const sendChatMessage: Ctx['sendChatMessage'] = async (text) => {
-    const custId = live.current.ui.activeCustomerId;
+  /** Wording for Nora's text reply when the orchestrator only has its stub (or is down). */
+  const chatWording = async (custId: string, text: string): Promise<{ reply: string; toolCalls?: { name: string; output: string }[] }> => {
     const c = cust(custId);
-    if (/person|persona/i.test(text)) {
-      appendLine(custId, { kind: 'cust', text, channel: 'chat' });
-      return 'person';
-    }
-
-    // 1) FastAPI orchestrator: runs Nemotron and writes transcript, triage and claim itself.
-    try {
-      const s = session(custId);
-      const res = await fetch(`${ORCHESTRATOR}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ customer_id: Number(s.customerId), user_transcript: text, call_id: Number(s.callId) }),
-        signal: AbortSignal.timeout(8000),
-      });
-      if (!res.ok) throw new Error(`orchestrator responded ${res.status}`);
-      const data: { reply?: string; bot_reply?: string; call_id?: number } = await res.json();
-      const reply = data.reply || data.bot_reply;
-      if (!reply) throw new Error('empty reply');
-      if (data.call_id) pendingCall.current[custId] = BigInt(data.call_id);
-      appendLine(custId, { kind: 'cust', text, channel: 'chat' }, { synced: true });
-      appendLine(custId, { kind: 'ai', text: reply, channel: 'chat' }, { synced: true });
-      if (reportsHazard(text)) {
-        // Same visible steps as the other paths (risk, claim card, emergency contact).
-        runTools(custId, hazardPlan(custId, text, 'chat'));
-        return 'hazard';
-      }
-      return 'ok';
-    } catch (err) {
-      console.warn('[FastAPI orchestrator unavailable, using built-in Nemotron route]', err);
-    }
-
-    appendLine(custId, { kind: 'cust', text, channel: 'chat' });
-    // 2) Next.js Nemotron route (NVIDIA NIM, or its own simulation without a key).
     try {
       const res = await fetch('/api/nemotron-agent', {
         method: 'POST',
@@ -634,26 +703,13 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         }),
       });
       if (!res.ok) throw new Error('bad response');
-      const data: { reply: string; toolCalls: { name: string; output: string }[] } = await res.json();
-      appendLine(custId, { kind: 'ai', text: data.reply, channel: 'chat' });
-      if (data.toolCalls?.length) {
-        const plan = hazardPlan(custId, text, 'chat');
-        runTools(
-          custId,
-          data.toolCalls.map((tc) => ({ name: tc.name, output: tc.output, effect: plan.find((p) => p.name === tc.name)?.effect })),
-        );
-        return 'hazard';
-      }
-      return 'ok';
+      return await res.json();
     } catch {
-      // 3) Offline reply.
       const hz = reportsHazard(text);
       const frz = FREEZE_RE.test(text);
       const es = c.language === 'es';
-      appendLine(custId, {
-        kind: 'ai',
-        channel: 'chat',
-        text: hz
+      return {
+        reply: hz
           ? frz
             ? es
               ? 'Parece una tubería congelada. No la descongele con fuego. Ya inicié un reclamo por daño de agua; no tiene que llenar formularios.'
@@ -664,10 +720,41 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           : es
             ? 'Qué bueno. Si algo cambia, escríbame aquí o llámenos cuando quiera. Le escribo de nuevo en la mañana.'
             : 'Glad to hear it. If anything changes, message me here or call us any time. I’ll check in again in the morning.',
-      });
-      if (hz) runTools(custId, hazardPlan(custId, text, 'chat'));
-      return hz ? 'hazard' : 'ok';
+      };
     }
+  };
+
+  const sendChatMessage: Ctx['sendChatMessage'] = async (text) => {
+    const custId = live.current.ui.activeCustomerId;
+    if (/person|persona/i.test(text)) {
+      appendLine(custId, { kind: 'cust', text, channel: 'chat' });
+      return 'person';
+    }
+
+    // Every message is a turn through the FastAPI orchestrator.
+    const turn = await customerTurn(custId, text, { channel: 'chat' });
+    if (turn) {
+      if (turn.ai_source === 'nemotron' && turn.reply) {
+        appendLine(custId, { kind: 'ai', text: turn.reply, channel: 'chat' }, { synced: turn.reply_logged });
+      } else {
+        appendLine(custId, { kind: 'ai', text: (await chatWording(custId, text)).reply, channel: 'chat' });
+      }
+      if (turn.claim) {
+        runTools(custId, hazardPlan(custId, text, 'chat', turn));
+        return 'hazard';
+      }
+      return 'ok';
+    }
+
+    // Orchestrator down: built-in Nemotron route (or offline reply) decides, and we write directly.
+    const w = await chatWording(custId, text);
+    appendLine(custId, { kind: 'ai', text: w.reply, channel: 'chat' });
+    const hz = w.toolCalls ? w.toolCalls.length > 0 : reportsHazard(text);
+    if (hz) {
+      const plan = hazardPlan(custId, text, 'chat');
+      runTools(custId, w.toolCalls?.length ? w.toolCalls.map((tc) => ({ name: tc.name, output: tc.output, effect: plan.find((p) => p.name === tc.name)?.effect })) : plan);
+    }
+    return hz ? 'hazard' : 'ok';
   };
 
   const confirmClaimField: Ctx['confirmClaimField'] = (custId, key, source) =>
@@ -688,7 +775,7 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       return { ...s, claims: { ...s.claims, [custId]: { ...cur, status: cur.status === 'approved' ? 'approved' : 'submitted', number: num, submittedAt: nowTime() } } };
     });
     // Verbal consent on the call → customer_approved (module status PENDING_AGENT_SUBMIT).
-    if (cl) pushClaim(custId, cl, true);
+    if (cl) writeClaim(custId, cl, true);
     appendLine(custId, { kind: 'event', text: `Policyholder submitted ${cl?.id} → ${num}`, dot: 'lavender' });
     return num;
   };
@@ -708,11 +795,20 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       ),
     );
     // agent_approve_claim needs customer_approved first (the agent can approve what was confirmed by voice).
-    const c = live.current.conn;
-    if (c) {
-      pushClaim(custId, cl, true);
-      dbCall(c.reducers.agentApproveClaim({ claimId: session(custId).claimId, claimNumber: num }));
-    }
+    void queued(custId, async () => {
+      const r = await post<{ ok: boolean }>('/api/claim/approve', {
+        ...ref(custId),
+        claim_number: num,
+        description: cl.description,
+        hazard_type: cl.type,
+        est_payout: cl.amount,
+      });
+      const c = live.current.conn;
+      if (!r?.ok && c) {
+        pushClaim(custId, cl, true);
+        dbCall(c.reducers.agentApproveClaim({ claimId: session(custId).claimId, claimNumber: num }));
+      }
+    });
     appendLine(custId, { kind: 'event', text: `${cl.id} approved → ${num} · crew dispatched`, dot: 'blue' });
     return num;
   };
@@ -762,7 +858,11 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       ),
     );
     // Mutes the AI on the call and marks the triage ticket AGENT_CONNECTED.
-    if (L.conn) dbCall(L.conn.reducers.joinCallByAgent({ callId: session(custId).callId }));
+    void queued(custId, async () => {
+      const r = await post<{ ok: boolean }>('/api/call/join', ref(custId));
+      const c = live.current.conn;
+      if (!r?.ok && c) dbCall(c.reducers.joinCallByAgent({ callId: session(custId).callId }));
+    });
     appendLine(custId, { kind: 'handoff', text: '', items });
     appendLine(custId, { kind: 'event', text: 'Jordan M. joined · Nora paused', dot: 'blue' });
   };
@@ -795,12 +895,19 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     appendLine(custId, { kind: 'event', text: tier ? `Priority set to ${tier} by Jordan M.` : 'Priority returned to AI ranking', dot: 'lavender' });
   };
 
+  const endCall = (custId: string, callId: bigint) =>
+    void queued(custId, async () => {
+      const r = await post<{ ok: boolean }>('/api/call/end', { customer_id: Number(dbIdOf(custId)), call_id: Number(callId) });
+      const c = live.current.conn;
+      if (!r?.ok && c) dbCall(c.reducers.endCall({ callId }));
+    });
+
   const setCallStatus: Ctx['setCallStatus'] = (custId, cs) => {
     const L = live.current;
     if (cs === 'ended' && L.ui.callStatus[custId] !== 'ended') {
       // Close the session in the database so the next call starts clean.
       const callId = L.openCall[custId]?.id ?? pendingCall.current[custId];
-      if (L.conn && callId !== undefined) dbCall(L.conn.reducers.endCall({ callId }));
+      if (callId !== undefined) endCall(custId, callId);
       delete pendingCall.current[custId];
     }
     update((s) => touch({ ...s, callStatus: { ...s.callStatus, [custId]: cs } }, 'cs:' + custId));
@@ -808,8 +915,7 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   const resetToDefaults = () => {
     // End every open call so the database doesn't feed the last run back in.
-    const L = live.current;
-    if (L.conn) for (const call of Object.values(L.openCall)) if (call) dbCall(L.conn.reducers.endCall({ callId: call.id }));
+    for (const [custId, call] of Object.entries(live.current.openCall)) if (call) endCall(custId, call.id);
     pendingCall.current = {};
     try {
       localStorage.removeItem(KEY);
@@ -835,7 +941,10 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     appendLine,
     applyHazard,
     runTools,
-    runHazardPlan: (custId, reported, channel) => runTools(custId, hazardPlan(custId, reported, channel)),
+    runHazardPlan: (custId, reported, channel, turn) => runTools(custId, hazardPlan(custId, reported, channel, turn)),
+    customerTurn,
+    apiStatus: api.status,
+    aiSource: api.source,
     sendChatMessage,
     confirmClaimField,
     submitClaim,

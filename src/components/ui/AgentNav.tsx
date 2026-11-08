@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { Logo } from '@/components/brand/Logo';
 import type { DbStatus } from '@/context/StateFarmContext';
+import type { AiSource, ApiStatus } from '@/lib/backend';
 
 export type AgentView = 'queue' | 'map' | 'drafts';
 
@@ -13,6 +14,8 @@ export function AgentNav({
   onHelp,
   lastSync,
   dbStatus,
+  apiStatus,
+  aiSource,
   customers,
   actingAs,
   onActingAs,
@@ -24,6 +27,8 @@ export function AgentNav({
   onHelp: () => void;
   lastSync: number;
   dbStatus: DbStatus;
+  apiStatus: ApiStatus;
+  aiSource: AiSource | null;
   customers: { id: string; name: string }[];
   actingAs: string;
   onActingAs: (id: string) => void;
@@ -61,6 +66,14 @@ export function AgentNav({
         <button onClick={onHelp} title="Keyboard shortcuts (?)" className="h-[38px] w-[38px] rounded-[9px] border border-white/[.14] bg-transparent text-mist text-sm cursor-pointer">
           ?
         </button>
+        <span
+          className="flex items-center gap-2 text-[13px] whitespace-nowrap"
+          style={{ color: '#B9A6C9' }}
+          title={apiStatus === 'up' ? `FastAPI orchestrator running ${aiSource === 'nemotron' ? 'Nemotron' : 'its keyword stub (nemotron_service.py not found)'}` : 'FastAPI orchestrator not reachable · writing to SpacetimeDB directly'}
+        >
+          <span className="w-2 h-2 rounded-full inline-block" style={{ background: apiStatus === 'up' ? '#8FC3DD' : apiStatus === 'down' ? '#FF6B73' : '#6E6878' }} />
+          {apiStatus === 'up' ? `FastAPI · ${aiSource === 'nemotron' ? 'Nemotron' : 'stub'}` : apiStatus === 'down' ? 'FastAPI offline' : 'FastAPI…'}
+        </span>
         <span
           className="flex items-center gap-2 text-[13px] whitespace-nowrap"
           style={{ color: '#B9A6C9' }}

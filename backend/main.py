@@ -10,32 +10,73 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Attempt to load your teammate's Nemotron function, otherwise use simulation stub
+# Load the team's Nemotron module if present; otherwise use a keyword stub with the same output shape.
+# The frontend checks `ai_source` in each /api/chat response: with "nemotron" Nora speaks the reply,
+# with "stub" she keeps her scripted lines and only uses the triage/claim data.
+import re
+
+AI_SOURCE = "nemotron"
 try:
     from nemotron_service import process_disaster_turn
 except ImportError:
-    async def process_disaster_turn(customer_id: int, user_transcript: str) -> dict:
-        is_consent = any(w in user_transcript.lower() for w in ["yes", "yeah", "please", "file", "approve"])
-        is_flood = any(w in user_transcript.lower() for w in ["water", "flood", "leak", "rising"])
-        return {
+    AI_SOURCE = "stub"
+
+    _NO_HARM = re.compile(
+        r"\b(no|without|zero)\s+(damage|problems?|issues?)\b|nothing('?s| is)?\s+(wrong|damaged|broken)|\ball good\b"
+        r"|sin (daños?|problemas?)|no hay (daños?|problemas?)|todo bien",
+        re.I,
+    )
+    _OK = re.compile(r"\b(okay|ok|fine|good|safe|bien|estoy bien)\b", re.I)
+    _CONSENT = re.compile(r"\b(yes|yeah|yep|sure|please|submit|file it|approve|s[ií]|claro|env[ií]e|adelante)\b", re.I)
+    # (pattern, detected_hazard, category, claim hazard_type, est_payout, priority) — any disaster type, EN/ES.
+    _KINDS = [
+        (r"freez|froze|frozen|pipe|helad|congel|tuber", "Freezing Pipes Hazard", "Freeze / Water", "Water damage: frozen pipe", 3500.0, 90),
+        (r"fire|smoke|burn|fuego|humo|quem", "Fire or smoke damage", "Fire", "Fire / smoke damage", 8000.0, 97),
+        (r"flood|water|leak|backup|basement|inund|agua|gotera|s[oó]tano", "Water or flood damage", "Flood & Property Hazard", "Water damage", 4500.0, 92),
+        (r"tree|branch|[aá]rbol|rama", "Fallen tree or branch", "Structural", "Fallen tree damage", 4000.0, 85),
+        (r"roof|hail|wind|shingle|techo|granizo|viento|tejas", "Roof or wind damage", "Roof / Wind", "Roof / wind damage", 3800.0, 70),
+        (r"power|outage|apag|sin luz", "Power outage", "Utilities", "Power outage / spoilage", 800.0, 75),
+        (r"heat|\bhot\b|\bac\b|a/c|calor|aire acondicionado", "Extreme heat · cooling failure", "Heat", "Equipment breakdown", 1200.0, 88),
+        (r"damage|broke|crack|collaps|daño|dañad|roto|rota", "Reported property damage", "Property damage", "Property damage", 2500.0, 75),
+    ]
+
+    async def process_disaster_turn(customer_id: int, user_transcript: str, stage: Optional[str] = None) -> dict:
+        text = user_transcript or ""
+        harmless = bool(_NO_HARM.search(text))
+        kind = None if harmless else next((k for k in _KINDS if re.search(k[0], text, re.I)), None)
+        out: Dict[str, Any] = {
             "voice_reply": (
-                "I understand your emergency. I am logging your details, "
-                "updating dispatch, and preparing your claim right now."
+                "I understand your emergency. I am logging your details, updating dispatch, and preparing your claim right now."
+                if kind else "Thanks for letting me know. I've noted that."
             ),
-            "priority_score": 95 if is_flood else 72,
-            "category": "Flood & Property Hazard" if is_flood else "Storm Check-in",
-            "summary_reason": (
-                "Active water intrusion reported indoors; urgent dispatch recommended"
-                if is_flood else "Resident check-in during severe weather alert"
-            ),
-            "detected_hazard": "Flash Flood" if is_flood else "Severe Weather",
-            "claim": {
-                "description": "Property damage reported during emergency welfare check-in",
-                "hazard_type": "Flash Flood Intrusion" if is_flood else "Weather Impact",
-                "est_payout": 7500.0 if is_flood else 3500.0,
-                "customer_approved": is_consent,
-            },
+            # Consent only counts when Nora has just asked to submit (or the caller isn't in a scripted flow).
+            "consent": bool(_CONSENT.search(text)) and stage in (None, "coverage"),
         }
+        if kind:
+            _, hazard, category, hazard_type, payout, priority = kind
+            out.update(
+                priority_score=priority,
+                category=category,
+                summary_reason=f"Reported by policyholder: {text[:120]}",
+                detected_hazard=hazard,
+                claim={
+                    "description": f"Reported by policyholder: {text[:200]}",
+                    "hazard_type": hazard_type,
+                    "est_payout": payout,
+                    "customer_approved": False,
+                },
+            )
+        elif stage in (None, "greet") and (harmless or _OK.search(text)):
+            # "I'm okay" on the first turn: a low-priority check-in, no claim.
+            out.update(priority_score=20, category="Check-in", summary_reason="Policyholder reports they are safe", detected_hazard="None")
+        return out
+
+
+async def run_turn(customer_id: int, text: str, stage: Optional[str]) -> dict:
+    if AI_SOURCE == "stub":
+        return await process_disaster_turn(customer_id, text, stage)  # type: ignore[call-arg]
+    return await process_disaster_turn(customer_id, text)
+
 
 app = FastAPI(title="State Farm Disaster Triage Orchestrator")
 
@@ -57,6 +98,10 @@ class ChatRequest(BaseModel):
     call_id: Optional[int] = None
     ticket_id: Optional[int] = None
     claim_id: Optional[int] = None
+    # Which step of Nora's scripted call this turn answers (greet, details, safety, coverage...).
+    stage: Optional[str] = None
+    # True when the frontend speaks its own scripted line; then the stub reply isn't written to the transcript.
+    scripted: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -157,42 +202,39 @@ async def sync_all_reducers(
     policy_id: int,
     customer_id: int,
     user_transcript: str,
-    voice_reply: str,
+    voice_reply: Optional[str],
     ai_data: dict,
 ):
-    claim = ai_data.get("claim", {})
-    priority_score = int(ai_data.get("priority_score", 50))
-    category = str(ai_data.get("category", "General Assistance"))
-    summary = str(ai_data.get("summary_reason", "Call in progress"))
-    hazard = str(ai_data.get("detected_hazard", "Storm"))
-
+    """Writes one turn: transcript always; triage and claim only when the turn produced them."""
+    chunk = f"Customer: {user_transcript}" + (f"\nAI: {voice_reply}" if voice_reply else "")
     async with httpx.AsyncClient() as client:
-        await asyncio.gather(
-            send_reducer(client, "update_call_transcript", [
-                call_id,
-                customer_id,
-                f"Customer: {user_transcript}\nAI: {voice_reply}"
-            ]),
-            send_reducer(client, "update_triage_score", [
+        # Transcript first so the call row exists before triage/claim reference it.
+        await send_reducer(client, "update_call_transcript", [call_id, customer_id, chunk])
+        jobs = []
+        if ai_data.get("priority_score") is not None:
+            jobs.append(send_reducer(client, "update_triage_score", [
                 ticket_id,
                 customer_id,
                 call_id,
-                priority_score,
-                category,
-                summary,
-                hazard
-            ]),
-            send_reducer(client, "create_or_update_claim", [
+                int(ai_data["priority_score"]),
+                str(ai_data.get("category", "General Assistance")),
+                str(ai_data.get("summary_reason", "Call in progress")),
+                str(ai_data.get("detected_hazard", "Unknown")),
+            ]))
+        claim = ai_data.get("claim")
+        if claim:
+            jobs.append(send_reducer(client, "create_or_update_claim", [
                 claim_id,
                 customer_id,
                 policy_id,
                 call_id,
-                str(claim.get("description", summary)),
-                str(claim.get("hazard_type", hazard)),
+                str(claim.get("description", "")),
+                str(claim.get("hazard_type", "Property damage")),
                 float(claim.get("est_payout", 3500.0)),
-                bool(claim.get("customer_approved", False))
-            ]),
-        )
+                bool(claim.get("customer_approved", False)),
+            ]))
+        if jobs:
+            await asyncio.gather(*jobs)
 
 
 # ---------------------------------------------------------------------------
@@ -201,38 +243,146 @@ async def sync_all_reducers(
 
 @app.post("/api/chat")
 async def chat_turn(req: ChatRequest, background_tasks: BackgroundTasks):
-    print(f"\n[Incoming Turn] Customer ID: {req.customer_id} | Message: '{req.user_transcript}'")
+    print(f"\n[Incoming Turn] Customer ID: {req.customer_id} | Stage: {req.stage} | Message: '{req.user_transcript}'")
 
     async with httpx.AsyncClient() as client:
         call_id, ticket_id, claim_id, policy_id = await resolve_session_context(
-            client,
-            req.customer_id,
-            req.call_id,
-            req.ticket_id,
-            req.claim_id
+            client, req.customer_id, req.call_id, req.ticket_id, req.claim_id
         )
 
-    ai_data = await process_disaster_turn(req.customer_id, req.user_transcript)
+    ai_data = await run_turn(req.customer_id, req.user_transcript, req.stage)
     voice_reply = ai_data.get("voice_reply", "I have logged your update.")
+    # A scripted frontend speaks (and logs) its own line; don't put the stub's reply in the transcript.
+    logged_reply = None if (req.scripted and AI_SOURCE == "stub") else voice_reply
 
     background_tasks.add_task(
-        sync_all_reducers,
-        call_id,
-        ticket_id,
-        claim_id,
-        policy_id,
-        req.customer_id,
-        req.user_transcript,
-        voice_reply,
-        ai_data
+        sync_all_reducers, call_id, ticket_id, claim_id, policy_id, req.customer_id, req.user_transcript, logged_reply, ai_data
     )
 
+    claim = ai_data.get("claim")
     return {
         "reply": voice_reply,
         "bot_reply": voice_reply,
+        "ai_source": AI_SOURCE,
+        "reply_logged": logged_reply is not None,
         "call_id": call_id,
         "ticket_id": ticket_id,
         "claim_id": claim_id,
-        "priority_score": ai_data.get("priority_score", 50),
-        "customer_approved": ai_data.get("claim", {}).get("customer_approved", False)
+        "priority_score": ai_data.get("priority_score"),
+        "category": ai_data.get("category"),
+        "summary_reason": ai_data.get("summary_reason"),
+        "detected_hazard": ai_data.get("detected_hazard"),
+        "claim": claim,
+        "consent": bool(ai_data.get("consent", (claim or {}).get("customer_approved", False))),
+        "customer_approved": bool((claim or {}).get("customer_approved", False)),
     }
+
+
+# ---------------------------------------------------------------------------
+# Gateway endpoints: every other database write from the frontend goes through here
+# ---------------------------------------------------------------------------
+
+class CallRef(BaseModel):
+    customer_id: int
+    call_id: Optional[int] = None
+
+
+class TranscriptRequest(CallRef):
+    speaker: str  # "Customer" | "AI" | "Agent"
+    text: str
+
+
+class ClaimRequest(CallRef):
+    claim_id: Optional[int] = None
+    description: str
+    hazard_type: str
+    est_payout: float
+    customer_approved: bool = False
+
+
+class TriageRequest(CallRef):
+    priority_score: int
+    category: str
+    summary_reason: str
+    detected_hazard: str
+
+
+class ApproveRequest(CallRef):
+    claim_id: Optional[int] = None
+    claim_number: str
+    # Fields to (re)write first with customer_approved=True, since agent_approve_claim requires it.
+    description: Optional[str] = None
+    hazard_type: Optional[str] = None
+    est_payout: Optional[float] = None
+
+
+async def _session(client: httpx.AsyncClient, ref: CallRef, claim_id: Optional[int] = None) -> Tuple[int, int, int, int]:
+    return await resolve_session_context(client, ref.customer_id, ref.call_id, None, claim_id)
+
+
+@app.post("/api/transcript")
+async def transcript_line(req: TranscriptRequest):
+    """Appends one spoken line (Nora's scripted line, the agent, or a caller line outside a chat turn)."""
+    speaker = req.speaker if req.speaker in ("Customer", "AI", "Agent") else "AI"
+    async with httpx.AsyncClient() as client:
+        call_id, *_ = await _session(client, req)
+        ok = await send_reducer(client, "update_call_transcript", [call_id, req.customer_id, f"{speaker}: {req.text}"])
+    return {"ok": ok, "call_id": call_id}
+
+
+@app.post("/api/call/join")
+async def call_join(req: CallRef):
+    """Agent steps in: mutes the AI on the call and marks the triage ticket AGENT_CONNECTED."""
+    async with httpx.AsyncClient() as client:
+        call_id, *_ = await _session(client, req)
+        ok = await send_reducer(client, "join_call_by_agent", [call_id])
+    return {"ok": ok, "call_id": call_id}
+
+
+@app.post("/api/call/end")
+async def call_end(req: CallRef):
+    """Hang up: completes the call session and resolves its triage ticket."""
+    async with httpx.AsyncClient() as client:
+        call_id, *_ = await _session(client, req)
+        ok = await send_reducer(client, "end_call", [call_id])
+    return {"ok": ok, "call_id": call_id}
+
+
+@app.post("/api/claim")
+async def claim_upsert(req: ClaimRequest):
+    """Creates/updates the claim for the current call (customer_approved=True is verbal consent)."""
+    async with httpx.AsyncClient() as client:
+        call_id, _ticket, claim_id, policy_id = await _session(client, req, req.claim_id)
+        ok = await send_reducer(client, "create_or_update_claim", [
+            claim_id, req.customer_id, policy_id, call_id, req.description, req.hazard_type, float(req.est_payout), bool(req.customer_approved)
+        ])
+    return {"ok": ok, "call_id": call_id, "claim_id": claim_id}
+
+
+@app.post("/api/triage")
+async def triage_upsert(req: TriageRequest):
+    """Updates the triage ticket for the current call (used when the frontend opens a claim itself)."""
+    async with httpx.AsyncClient() as client:
+        call_id, ticket_id, *_ = await _session(client, req)
+        ok = await send_reducer(client, "update_triage_score", [
+            ticket_id, req.customer_id, call_id, max(0, min(100, int(req.priority_score))), req.category, req.summary_reason, req.detected_hazard
+        ])
+    return {"ok": ok, "call_id": call_id, "ticket_id": ticket_id}
+
+
+@app.post("/api/claim/approve")
+async def claim_approve(req: ApproveRequest):
+    """Agent approval. Makes sure consent is recorded, then submits the claim with its number."""
+    async with httpx.AsyncClient() as client:
+        call_id, _ticket, claim_id, policy_id = await _session(client, req, req.claim_id)
+        if req.description is not None and req.hazard_type is not None and req.est_payout is not None:
+            await send_reducer(client, "create_or_update_claim", [
+                claim_id, req.customer_id, policy_id, call_id, req.description, req.hazard_type, float(req.est_payout), True
+            ])
+        ok = await send_reducer(client, "agent_approve_claim", [claim_id, req.claim_number])
+    return {"ok": ok, "call_id": call_id, "claim_id": claim_id}
+
+
+@app.get("/api/health")
+async def health():
+    return {"ok": True, "ai_source": AI_SOURCE}

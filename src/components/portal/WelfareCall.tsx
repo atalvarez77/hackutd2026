@@ -154,6 +154,9 @@ export function WelfareCall() {
   const status = callStatus[c.id] || 'idle';
   const [stage, setStage] = useState<Stage>('greet');
   const [speaking, setSpeaking] = useState(false);
+  /** Waiting on the FastAPI orchestrator for this turn. */
+  const [thinking, setThinking] = useState(false);
+  const busy = useRef(false);
   const [voice, setVoice] = useState(true);
   const [muted, setMuted] = useState(false);
   const [listening, setListening] = useState(false);
@@ -221,9 +224,9 @@ export function WelfareCall() {
   };
 
   /** Nora says a line: transcript (with English translation for Spanish lines) + voice. */
-  const say = (p: Pair, after?: () => void, lang: Language = c.language) => {
+  const say = (p: Pair, after?: () => void, lang: Language = c.language, synced = false) => {
     lastSaid.current = p;
-    store.appendLine(c.id, { kind: 'ai', channel: 'call', text: lang === 'es' ? p.es : p.en, tr: lang === 'es' ? p.en : undefined });
+    store.appendLine(c.id, { kind: 'ai', channel: 'call', text: lang === 'es' ? p.es : p.en, tr: lang === 'es' && p.en !== p.es ? p.en : undefined }, { synced });
     speak(lang === 'es' ? p.es : p.en, lang, after);
   };
 
@@ -317,37 +320,50 @@ export function WelfareCall() {
         : { en: 'State Farm: Stay away from the damaged area. If you smell gas or see sparks, leave and call 911.', es: 'State Farm: Manténgase lejos del área dañada. Si huele a gas o ve chispas, salga y llame al 911.' },
     );
 
-  /** One customer reply, from voice, a chip or typing. */
-  const reply = (text: string) => {
-    if (!text.trim() || !live) return;
-    store.appendLine(c.id, { kind: 'cust', channel: 'call', text });
+  /**
+   * One customer reply, from voice, a chip or typing. It goes through the FastAPI orchestrator
+   * first (triage, claim, transcript in SpacetimeDB); the call then moves to its next step.
+   */
+  const reply = async (text: string) => {
+    if (!text.trim() || !live || busy.current) return;
+    busy.current = true;
+    setThinking(true);
+    const atStage = stage;
+    const turn = await store.customerTurn(c.id, text, { channel: 'call', stage: atStage });
+    busy.current = false;
+    setThinking(false);
     if (takeover) return; // Jordan is handling the call now; Nora stays quiet.
 
-    const hazardNow = reportsHazard(text) ? hazardFor(c, text).hazard : c.detectedHazard;
-    const L = lines(c, hazardNow, claim?.type || '');
+    // The orchestrator decides whether this reports damage; the keyword check is the offline fallback.
+    const hazard = turn ? !!turn.claim : reportsHazard(text);
+    const hazardNow = turn?.claim ? turn.detected_hazard || c.detectedHazard : hazard ? hazardFor(c, text).hazard : c.detectedHazard;
+    const L = lines(c, hazardNow, turn?.claim?.hazard_type || claim?.type || '');
+    // With real Nemotron behind the orchestrator Nora speaks its reply; with its stub, her script.
+    const ai = turn?.ai_source === 'nemotron' && turn.reply ? turn : null;
+    const respond = (p: Pair, after?: () => void) => (ai ? say({ en: ai.reply, es: ai.reply }, after, c.language, ai.reply_logged) : say(p, after));
 
-    if (PERSON_RE.test(text) && stage !== 'transfer') return transfer('');
+    if (PERSON_RE.test(text) && atStage !== 'transfer') return transfer('');
 
-    switch (stage) {
+    switch (atStage) {
       case 'greet':
         // Reassurance ("I'm okay", "no damage") closes the check-in; any report of damage starts a claim.
-        if (!reportsHazard(text) && (OK_RE.test(text) || /\b(no|nada|nothing)\b/i.test(text))) {
+        if (!hazard && (OK_RE.test(text) || /\b(no|nada|nothing)\b/i.test(text))) {
           store.patchCustomer(c.id, { checkInStatus: 'completed' });
-          say(L.ok);
+          respond(L.ok);
           setStage('closing');
         } else {
-          store.runHazardPlan(c.id, text, 'call');
-          say(L.details);
+          store.runHazardPlan(c.id, text, 'call', turn?.claim ? turn : null);
+          respond(L.details);
           setStage('details');
         }
         break;
       case 'details':
         if (NO_RE.test(text) && !YES_RE.test(text)) {
-          say(L.fix);
+          respond(L.fix);
           setStage('fix');
         } else {
           confirm(['type', 'when', 'where', 'quote']);
-          say(L.safety);
+          respond(L.safety);
           setStage('safety');
           textSafety();
         }
@@ -355,26 +371,26 @@ export function WelfareCall() {
       case 'fix':
         store.appendLine(c.id, { kind: 'event', text: `Correction noted for adjuster: “${text}”`, dot: 'lavender' });
         confirm(['type', 'when', 'where', 'quote'], 'Corrected on call');
-        say(L.safety);
+        respond(L.safety);
         setStage('safety');
         textSafety();
         break;
       case 'safety':
         confirm(['safe', 'shut', 'heat', 'notify']);
-        say(/help|ayuda|can.?t|no puedo/i.test(text) ? { en: L.shutHelp.en + L.photos.en, es: L.shutHelp.es + L.photos.es } : L.photos);
+        respond(/help|ayuda|can.?t|no puedo/i.test(text) ? { en: L.shutHelp.en + L.photos.en, es: L.shutHelp.es + L.photos.es } : L.photos);
         setStage('photos');
         break;
       case 'photos':
-        say(L.coverage);
+        respond(L.coverage);
         setStage('coverage');
         break;
       case 'coverage':
         if (NO_RE.test(text) && !YES_RE.test(text)) {
-          say(L.draftSaved);
+          respond(L.draftSaved);
           setStage('closing');
         } else {
           const num = store.submitClaim(c.id);
-          say(L.submitted(num));
+          respond(L.submitted(num));
           setStage('submitted');
           sms({
             en: `State Farm: Claim ${num} received. An adjuster will contact you within 24 hours. Reply HELP for a person.`,
@@ -385,7 +401,7 @@ export function WelfareCall() {
       case 'submitted':
       case 'closing':
         endAfterSpeak.current = true;
-        say(L.bye, () => {
+        respond(L.bye, () => {
           if (endAfterSpeak.current) {
             endAfterSpeak.current = false;
             end('Call completed · Nora said goodbye');
@@ -631,6 +647,8 @@ export function WelfareCall() {
                   ? T('Listening…', 'Escuchando…')
                   : speaking
                     ? T('Nora is speaking', 'Nora está hablando')
+                    : thinking
+                      ? T('Nora is checking…', 'Nora está revisando…')
                     : T('Your turn to talk', 'Su turno')}
           </span>
         </header>
@@ -674,7 +692,7 @@ export function WelfareCall() {
                   <button
                     key={p.en}
                     onClick={() => reply(es ? p.es : p.en)}
-                    disabled={speaking && !takeover}
+                    disabled={(speaking && !takeover) || thinking}
                     className="h-9 px-3.5 rounded-full border border-charcoal/30 bg-white text-[15px] cursor-pointer hover:border-charcoal disabled:opacity-40"
                   >
                     {es ? p.es : p.en}
