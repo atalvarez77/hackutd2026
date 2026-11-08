@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
 
 const client = new OpenAI({
-  apiKey: process.env.NVIDIA_API_KEY,
+  // Placeholder when unset so the build doesn't crash; the handler checks the real key before calling.
+  apiKey: process.env.NVIDIA_API_KEY || 'not-set',
   baseURL: process.env.NVIDIA_BASE_URL || 'https://integrate.api.nvidia.com/v1',
 });
 

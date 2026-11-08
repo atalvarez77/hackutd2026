@@ -1,7 +1,7 @@
 import type { SourceKind } from '@/lib/claim';
 import { tx } from '@/lib/i18n';
 
-const DOT: Record<SourceKind, string> = { call: '#ED1D24', policy: '#286784', transcript: '#7D6F86' };
+const DOT: Record<SourceKind, string> = { call: '#E61A21', policy: '#286784', transcript: '#7D6F86' };
 
 export function PrefilledField({
   label,

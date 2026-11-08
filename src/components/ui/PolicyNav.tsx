@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
+import { applyPrefs, useReaderPrefs, writePrefs } from '@/lib/reader';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useStore } from '@/context/StateFarmContext';
@@ -24,24 +25,11 @@ export function PolicyNav() {
     document.documentElement.lang = lang;
   }, [lang]);
 
-  // Larger text / high contrast, remembered per browser (older callers are the main audience).
-  const [large, setLarge] = useState(false);
-  const [contrast, setContrast] = useState(false);
+  // Larger text / high contrast / easier words, remembered per browser (older callers are the main audience).
+  const prefs = useReaderPrefs();
   useEffect(() => {
-    try {
-      const v = JSON.parse(localStorage.getItem('hn_reader') || '{}');
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setLarge(!!v.large);
-      setContrast(!!v.contrast);
-    } catch {}
-  }, []);
-  useEffect(() => {
-    document.documentElement.classList.toggle('hn-large', large);
-    document.documentElement.classList.toggle('hn-contrast', contrast);
-    try {
-      localStorage.setItem('hn_reader', JSON.stringify({ large, contrast }));
-    } catch {}
-  }, [large, contrast]);
+    applyPrefs(prefs);
+  }, [prefs]);
 
   return (
     <>
@@ -54,21 +42,30 @@ export function PolicyNav() {
           </span>
           <span className="flex-1" />
           <button
-            onClick={() => setLarge(!large)}
-            aria-pressed={large}
+            onClick={() => writePrefs({ large: !prefs.large })}
+            aria-pressed={prefs.large}
             className="h-[30px] px-2.5 rounded-md border bg-transparent text-white text-[14px] cursor-pointer"
-            style={{ borderColor: large ? '#fff' : 'rgba(255,255,255,.25)' }}
+            style={{ borderColor: prefs.large ? '#fff' : 'rgba(255,255,255,.25)' }}
           >
             <span className="font-semibold">A</span>
             <span className="text-[17px] font-semibold">A</span> {lang === 'es' ? 'Letra grande' : 'Larger text'}
           </button>
           <button
-            onClick={() => setContrast(!contrast)}
-            aria-pressed={contrast}
+            onClick={() => writePrefs({ contrast: !prefs.contrast })}
+            aria-pressed={prefs.contrast}
             className="h-[30px] px-2.5 rounded-md border bg-transparent text-white text-[14px] cursor-pointer"
-            style={{ borderColor: contrast ? '#fff' : 'rgba(255,255,255,.25)' }}
+            style={{ borderColor: prefs.contrast ? '#fff' : 'rgba(255,255,255,.25)' }}
           >
             {lang === 'es' ? 'Alto contraste' : 'High contrast'}
+          </button>
+          <button
+            onClick={() => writePrefs({ simple: !prefs.simple })}
+            aria-pressed={prefs.simple}
+            title={lang === 'es' ? 'Explica los términos de seguro y pide a Nora palabras sencillas' : 'Explains insurance terms and asks Nora to use simple words'}
+            className="h-[30px] px-2.5 rounded-md border bg-transparent text-white text-[14px] cursor-pointer"
+            style={{ borderColor: prefs.simple ? '#fff' : 'rgba(255,255,255,.25)' }}
+          >
+            {lang === 'es' ? 'Palabras sencillas' : 'Easier words'}
           </button>
           <label className="flex items-center gap-2 text-[#B4A9BC]">
             <span className="hn-label text-[10px]">{lang === 'es' ? 'Demo · usuario' : 'Demo · acting as'}</span>

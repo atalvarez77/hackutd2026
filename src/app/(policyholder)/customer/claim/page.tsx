@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { useStore } from '@/context/StateFarmContext';
+import { plain, useReaderPrefs } from '@/lib/reader';
 import { ClaimStepper } from '@/components/ui/ClaimStepper';
 import { PrefilledField } from '@/components/ui/PrefilledField';
 import { NoraWave } from '@/components/ui/NoraWave';
@@ -20,6 +21,7 @@ export default function ClaimPage() {
 function ClaimFlowView() {
   const store = useStore();
   const { activeCustomer: c, claims } = store;
+  const prefs = useReaderPrefs();
   const es = c.language === 'es';
   const T = (en: string, sp: string) => (es ? sp : en);
   const claim = claims[c.id];
@@ -166,7 +168,7 @@ function ClaimFlowView() {
             {!done && n === 3 && (
               <>
                 <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(180px,1fr))]">
-                  {coverageCards(c, c.language).map((cv) => (
+                  {coverageCards(c, c.language, prefs.simple).map((cv) => (
                     <div key={cv.k} className="p-4 rounded-2xl bg-petal-50 flex flex-col gap-1">
                       <span className="hn-label text-[11px] text-grey">{cv.k}</span>
                       <span className="font-mono font-bold text-xl">{cv.v}</span>
@@ -191,7 +193,7 @@ function ClaimFlowView() {
                     [T('Date', 'Fecha'), lossDate(c.language)],
                     [T('Location', 'Lugar'), `${c.address}, ${c.city} ${c.state}`],
                     [T('Estimate', 'Estimado'), money(claim.amount)],
-                    [T('Deductible', 'Deducible'), money(c.policy.deductible)],
+                    [plain('deductible', c.language, prefs.simple), money(c.policy.deductible)],
                     [T('Photos', 'Fotos'), photos.filter(Boolean).length ? T(`${photos.filter(Boolean).length} added`, `${photos.filter(Boolean).length} agregadas`) : T('Skipped (adjuster will take them)', 'Omitidas (el ajustador las tomará)')],
                     [T('Contact notified', 'Contacto avisado'), `${c.emergencyContact.name} · ${c.emergencyContact.phone}`],
                   ].map(([k, v]) => (
@@ -218,7 +220,7 @@ function ClaimFlowView() {
                   <span className="text-[15px] text-petal">{T('What happens next, and roughly when:', 'Lo que sigue y cuándo:')}</span>
                 </div>
                 {[
-                  [T('Adjuster assigned', 'Ajustador asignado'), T('Jordan Mills, CAT team · Dallas', 'Jordan Mills, equipo de catástrofes · Dallas'), T('Within 24h', 'En 24h')],
+                  [prefs.simple ? plain('adjuster', c.language, true) : T('Adjuster assigned', 'Ajustador asignado'), T('Jordan Mills, CAT team · Dallas', 'Jordan Mills, equipo de catástrofes · Dallas'), T('Within 24h', 'En 24h')],
                   [T('Estimate', 'Estimado'), T('An inspection to price the repair', 'Una inspección para calcular la reparación'), T('1–3 days', '1–3 días')],
                   [T('Payment', 'Pago'), T(`Repair cost minus your ${money(c.policy.deductible)} deductible`, `Costo menos su deducible de ${money(c.policy.deductible)}`), T('After estimate', 'Tras el estimado')],
                 ].map(([label, body, st], i) => {
@@ -229,7 +231,7 @@ function ClaimFlowView() {
                       className="grid grid-cols-[44px_1fr_auto] gap-3.5 items-center px-[18px] py-4 rounded-2xl"
                       style={{ border: `2px solid ${on ? '#286784' : 'rgba(26,26,26,.12)'}`, background: on ? 'rgba(40,103,132,.06)' : '#fff' }}
                     >
-                      <span className="w-[38px] h-[38px] rounded-full text-white flex items-center justify-center font-mono font-bold text-sm" style={{ background: on ? '#286784' : i === 0 ? '#ED1D24' : '#C7BFCC' }}>
+                      <span className="w-[38px] h-[38px] rounded-full text-white flex items-center justify-center font-mono font-bold text-sm" style={{ background: on ? '#286784' : i === 0 ? '#E61A21' : '#C7BFCC' }}>
                         {i + 6}
                       </span>
                       <span className="flex flex-col gap-0.5">
@@ -258,7 +260,7 @@ function ClaimFlowView() {
               {!done && n < 2 && !allOk ? T('Confirm each item to continue.', 'Confirme cada dato para continuar.') : done ? T('You’ll get a text at each step.', 'Recibirá un mensaje en cada paso.') : n === 3 ? T('Coverage is from your policy on file.', 'La cobertura viene de su póliza.') : ''}
             </span>
             {!done ? (
-              <button onClick={next} className="h-[52px] px-[26px] rounded-full text-white font-extrabold text-base cursor-pointer" style={{ background: canNext ? '#ED1D24' : '#C7BFCC' }}>
+              <button onClick={next} className="h-[52px] px-[26px] rounded-full text-white font-extrabold text-base cursor-pointer" style={{ background: canNext ? '#E61A21' : '#C7BFCC' }}>
                 {n === 4 ? T('Submit claim', 'Enviar reclamo') : n === 2 ? T('Continue (photos optional)', 'Continuar (fotos opcionales)') : T('Confirm & continue', 'Confirmar y seguir')}
               </button>
             ) : (

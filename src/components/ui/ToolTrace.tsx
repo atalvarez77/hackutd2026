@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import type { ToolCall } from '@/types/statefarm';
 
-const COLOR: Record<ToolCall['status'], string> = { done: '#8FC3DD', running: '#FF6B73', queued: '#6E6878', paused: '#6E6878' };
+const COLOR: Record<ToolCall['status'], string> = { done: '#A8C4D6', running: '#EF8E87', queued: '#A7ABB3', paused: '#A7ABB3' };
 
 /** Nemotron tool-call log. Collapsed by default so the transcript stays the focus. */
 export function ToolTrace({ runs, paused }: { runs: ToolCall[]; paused: boolean }) {
@@ -13,7 +13,7 @@ export function ToolTrace({ runs, paused }: { runs: ToolCall[]; paused: boolean 
     ? `${done} of ${runs.length} done${paused ? ' · paused for you' : ''}`
     : 'None yet';
   return (
-    <div className="border-t border-white/[.08]">
+    <div className="border-t border-white/[.14]">
       <button onClick={() => setOpen(!open)} className="w-full flex items-center gap-2 px-[18px] py-2.5 bg-transparent text-ink text-[15px] text-left cursor-pointer">
         <span className="font-semibold">Nora&apos;s actions</span>
         <span className="text-mist">{summary}</span>

@@ -2,7 +2,7 @@ type Mode = 'policyholder' | 'agent';
 
 /** Shield with a roofline top, arched doorway and round window. Cut-outs take the surface color. */
 export function LogoMark({ mode = 'policyholder', size = 36, bg }: { mode?: Mode; size?: number; bg?: string }) {
-  const fill = mode === 'agent' ? '#FF3B47' : '#ED1D24';
+  const fill = mode === 'agent' ? '#FF3B47' : '#E61A21';
   const hole = bg ?? (mode === 'agent' ? '#0E0E10' : '#FFFFFF');
   return (
     <svg width={size} height={size} viewBox="0 0 64 64" aria-hidden className="flex-none">
@@ -22,7 +22,7 @@ export function Logo({ mode = 'policyholder', size = 36, textSize = 28, bg }: { 
         className="font-display italic font-black leading-none whitespace-nowrap"
         style={{ fontSize: textSize, color: agent ? '#fff' : '#1A1A1A' }}
       >
-        Hey <span style={{ color: agent ? '#FF3B47' : '#ED1D24' }}>Neighbor</span>
+        Hey <span style={{ color: agent ? '#FF3B47' : '#E61A21' }}>Neighbor</span>
       </span>
     </span>
   );

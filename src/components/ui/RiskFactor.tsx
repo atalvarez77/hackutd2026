@@ -1,5 +1,5 @@
 export function RiskFactor({ label, why, value, max = 40 }: { label: string; why: string; value: number; max?: number }) {
-  const c = value >= 30 ? '#FF6B73' : '#9A93A3';
+  const c = value >= 30 ? '#EF8E87' : '#B3B7BF';
   return (
     <div className="grid grid-cols-[minmax(0,1.3fr)_90px_30px] gap-2.5 items-center">
       <span className="flex flex-col gap-0.5">

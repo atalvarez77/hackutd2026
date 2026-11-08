@@ -5,6 +5,7 @@ import { useStore } from '@/context/StateFarmContext';
 import { claimFields } from '@/lib/claim';
 import { money } from '@/lib/hn';
 import { makeT, tx } from '@/lib/i18n';
+import { ClaimTimeline } from '@/components/portal/ClaimTimeline';
 
 /**
  * Right-hand side of the portal: everything Nora does on the call shows up here as it
@@ -23,14 +24,12 @@ export function CallSummary() {
   const fields = all.filter((f) => claim?.confirmed[f.key]);
   const confirmed = fields.length;
   const left = all.length - confirmed;
-  const stage = !has ? 0 : claim.status === 'approved' ? 4 : claim.status === 'submitted' ? 2 : 1;
-  const stages = [T('Drafted', 'Borrador'), T('Agent review', 'Revisión'), T('Approved', 'Aprobado'), T('Crew sent', 'Equipo enviado')];
   const statusLabel = !has ? '' : claim.status === 'approved' ? T('Approved', 'Aprobado') : claim.status === 'submitted' ? T('Submitted', 'Enviado') : T('In progress', 'En curso');
 
   return (
     <section id="claims" className="rounded-2xl border border-line p-6 flex flex-col gap-5 scroll-mt-[110px]">
       <div className="flex items-baseline gap-2.5">
-        <span className="font-bold text-[24px] leading-none">{T('Your claim', 'Su reclamo')}</span>
+        <h2 className="m-0 font-bold text-[24px] leading-none">{T('Your claim', 'Su reclamo')}</h2>
         <span className="flex-1" />
         {statusLabel && <span className="text-[15px] font-semibold text-grey">{statusLabel}</span>}
       </div>
@@ -67,16 +66,16 @@ export function CallSummary() {
             <span className="font-mono font-bold text-2xl">{money(claim.amount)}</span>
           </div>
 
-          <div className="grid grid-cols-4 gap-1.5">
-            {stages.map((label, i) => (
-              <div key={label} className="flex flex-col gap-1.5">
-                <span className="h-1.5 rounded-md" style={{ background: i < stage ? '#ED1D24' : '#EFD9CE' }} />
-                <span className="font-bold text-[12px]" style={{ color: i < stage ? '#1A1A1A' : '#474954' }}>
-                  {label}
-                </span>
-              </div>
-            ))}
-          </div>
+          {claim.status === 'approved' && (
+            <div className="rounded-xl px-4 py-3 flex items-center gap-3 hn-in" style={{ background: '#E8F4EC', color: '#14532D' }}>
+              <span className="w-7 h-7 rounded-full flex items-center justify-center font-bold text-white flex-none" style={{ background: '#1F7A4D' }} aria-hidden>
+                ✓
+              </span>
+              <span className="text-[15px] font-semibold leading-snug">{T('Approved. Help is on the way.', 'Aprobado. La ayuda va en camino.')}</span>
+            </div>
+          )}
+
+          <ClaimTimeline claim={claim} lang={lang} />
 
           <div className="flex flex-col">
             <div className="flex items-baseline justify-between pb-2">

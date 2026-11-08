@@ -14,6 +14,7 @@ import type {
   UrgencyLevel,
 } from '@/types/statefarm';
 import { first, hazardFor, nowTime, WATER_BACKUP } from '@/lib/hn';
+import { readPrefs } from '@/lib/reader';
 import { DbConnection } from '@/module_bindings';
 import type { ActiveCall, Claim, Customer, Policy, TriageQueue } from '@/module_bindings/types';
 import { apiState, checkHealth, onApiChange, post, postRaw, type ApiStatus, type NoraAction, type TurnFailure, type TurnResult } from '@/lib/backend';
@@ -254,6 +255,8 @@ interface Ctx extends AppState {
   confirmClaimField: (custId: string, key: string, source: string | null) => void;
   submitClaim: (custId: string) => string;
   approveClaimDraft: (custId: string) => string | null;
+  /** Agent corrects what Nora put on the claim (before approval). Updates every tab and the database. */
+  editClaim: (custId: string, edit: { type: string; amount: number; description: string }) => void;
   createContactRequest: (custId: string, channel: RequestChannel, topic: string, fromCall?: boolean) => string;
   acceptContactRequest: (id: string) => void;
   cancelContactRequest: (custId: string) => void;
@@ -614,6 +617,10 @@ const session = (custId: string) => {
       water_backup_endorsement: WATER_BACKUP[custId] || 'unknown',
       emergency_contact: `${who.emergencyContact.name} (${who.emergencyContact.relationship}, ${who.emergencyContact.phone})`,
       prior_claims: who.claimsHistory.map((h) => `${h.date.slice(0, 4)} ${h.type}`).join('; ') || 'none',
+      // "Easier words" in the portal: read when the turn is sent, so it applies from the next thing Nora says.
+      ...(readPrefs().simple
+        ? { communication_preference: 'Prefers simple, everyday words and short sentences. Explain any insurance term (deductible, adjuster, coverage) in plain language.' }
+        : {}),
     };
   };
 
@@ -810,6 +817,22 @@ const session = (custId: string) => {
     return num;
   };
 
+  const editClaim: Ctx['editClaim'] = (custId, e) => {
+    const cur = live.current.claims[custId];
+    if (!cur || cur.status === 'none' || cur.status === 'approved') return;
+    const changes = [
+      e.type !== cur.type && `type “${cur.type}” → “${e.type}”`,
+      e.amount !== cur.amount && `estimate $${Math.round(cur.amount).toLocaleString()} → $${e.amount.toLocaleString()}`,
+      e.description !== cur.description && 'description',
+    ].filter(Boolean);
+    if (!changes.length) return;
+    const next: ClaimFlow = { ...cur, type: e.type, amount: e.amount, description: e.description };
+    update((s) => touch({ ...s, claims: { ...s.claims, [custId]: { ...(s.claims[custId] || cur), type: e.type, amount: e.amount, description: e.description } } }, 'cu:' + custId));
+    // Same claim row, same consent state; only the fields change.
+    writeClaim(custId, next, cur.status === 'submitted');
+    appendLine(custId, { kind: 'event', text: `Claim edited by Jordan M.: ${changes.join(', ')}`, dot: 'lavender' });
+  };
+
   const approveClaimDraft: Ctx['approveClaimDraft'] = (custId) => {
     const cl = live.current.claims[custId];
     if (!cl || cl.status === 'none' || cl.status === 'approved') return null;
@@ -970,6 +993,7 @@ const session = (custId: string) => {
     confirmClaimField,
     submitClaim,
     approveClaimDraft,
+    editClaim,
     createContactRequest,
     acceptContactRequest,
     cancelContactRequest,

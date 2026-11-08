@@ -4,7 +4,7 @@ export function NoraWave({
   size = 26,
   bars = 5,
   width = 4,
-  color = '#ED1D24',
+  color = '#E61A21',
 }: {
   speaking?: boolean;
   size?: number;
