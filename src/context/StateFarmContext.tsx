@@ -1,148 +1,433 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { CustomerProfile } from '@/types/statefarm';
+import React, { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { initialCustomers } from '@/data/mockCustomers';
-import confetti from 'canvas-confetti';
+import type {
+  CallStatus,
+  ClaimFlow,
+  ContactRequest,
+  CustomerProfile,
+  Language,
+  Line,
+  RequestChannel,
+  ToolCall,
+  UrgencyLevel,
+} from '@/types/statefarm';
+import { first, hazardFor, HAZARD_RE, nowTime } from '@/lib/hn';
 
-interface StateFarmContextType {
+const KEY = 'sf_v9';
+const CHANNEL = 'hn_demo';
+
+export interface AppState {
   customers: CustomerProfile[];
   activeCustomerId: string;
-  setActiveCustomerId: (id: string) => void;
+  claims: Record<string, ClaimFlow>;
+  contactRequests: ContactRequest[];
+  agentTakeover: Record<string, boolean>;
+  transcripts: Record<string, Line[]>;
+  toolRuns: Record<string, ToolCall[]>;
+  priorityOverride: Record<string, UrgencyLevel | null>;
+  callStatus: Record<string, CallStatus>;
+  reqSeq: number;
+}
+
+/** English translations for the seeded Spanish chat (shown under Spanish lines in the agent console). */
+const SEED_TR: Record<string, string> = {
+  'cust-1:msg-1': 'Hi, Doña Sofía! State Farm check-in for the 14°F freeze. How are the pipes?',
+  'cust-1:msg-2': 'Hi. It’s very cold. I opened the tap and almost no water comes out. There’s banging under the sink.',
+  'cust-1:msg-3': 'Risk alert: possible freezing. Leave the faucet dripping and open the cabinets. I’ve prepared a preventive claim.',
+};
+
+const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36);
+
+function initialState(): AppState {
+  const claims: Record<string, ClaimFlow> = {};
+  const transcripts: Record<string, Line[]> = {};
+  for (const c of initialCustomers) {
+    const d = c.claimDraft;
+    claims[c.id] = {
+      id: d.id,
+      status: d.status === 'drafted' ? 'draft' : d.status === 'approved' ? 'approved' : 'none',
+      number: d.claimNumber ?? (d.status === 'approved' ? 'SF-CLM-2026-3' + c.id.slice(-1) + '18' : undefined),
+      type: d.hazardType,
+      amount: d.estimatedLoss,
+      description: d.description,
+      confirmed: {},
+    };
+    transcripts[c.id] = c.chatTranscript.map((m) => ({
+      id: m.id,
+      kind: m.sender === 'bot' ? 'ai' : m.sender === 'agent' ? 'agent' : 'cust',
+      text: m.text.replace(/^⚠️\s*/, ''),
+      tr: SEED_TR[`${c.id}:${m.id}`],
+      time: m.timestamp,
+      channel: 'chat',
+    }));
+  }
+  return {
+    customers: initialCustomers.map((c) => ({ ...c })),
+    activeCustomerId: initialCustomers[0].id,
+    claims,
+    contactRequests: [],
+    agentTakeover: {},
+    transcripts,
+    toolRuns: {},
+    priorityOverride: {},
+    callStatus: { 'cust-1': 'ringing', 'cust-6': 'ai', 'cust-2': 'ai' },
+    reqSeq: 0,
+  };
+}
+
+export interface ToolStep {
+  name: string;
+  output: string;
+  effect?: () => void;
+}
+
+interface Ctx extends AppState {
+  hydrated: boolean;
+  lastSync: number;
   activeCustomer: CustomerProfile;
-  sendChatMessage: (text: string, sender?: 'customer' | 'bot' | 'agent') => void;
-  approveClaimDraft: (customerId: string) => void;
-  updateCustomerLanguage: (customerId: string, lang: 'en' | 'es') => void;
-  simulateHazardDetection: (customerId: string, hazardDescription: string, estimatedLoss: number) => void;
+  setActiveCustomerId: (id: string) => void;
+  updateCustomerLanguage: (id: string, lang: Language) => void;
+  appendLine: (custId: string, line: Omit<Line, 'id' | 'time'> & { time?: string }) => void;
+  applyHazard: (custId: string, reported?: string) => ClaimFlow;
+  runTools: (custId: string, steps: ToolStep[]) => void;
+  runHazardPlan: (custId: string, reported: string, channel: 'chat' | 'call') => void;
+  sendChatMessage: (text: string) => Promise<'person' | 'hazard' | 'ok'>;
+  confirmClaimField: (custId: string, key: string, source: string | null) => void;
+  submitClaim: (custId: string) => string;
+  approveClaimDraft: (custId: string) => string | null;
+  createContactRequest: (custId: string, channel: RequestChannel, topic: string, fromCall?: boolean) => string;
+  acceptContactRequest: (id: string) => void;
+  cancelContactRequest: (custId: string) => void;
+  stepIn: (custId: string) => void;
+  sendAgentMessage: (custId: string, text: string) => void;
+  setPriorityOverride: (custId: string, tier: UrgencyLevel | null) => void;
+  setCallStatus: (custId: string, s: CallStatus) => void;
+  patchCustomer: (custId: string, p: Partial<CustomerProfile>) => void;
   resetToDefaults: () => void;
 }
 
-const StateFarmContext = createContext<StateFarmContextType | undefined>(undefined);
+const StateFarmContext = createContext<Ctx | undefined>(undefined);
 
 export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [customers, setCustomers] = useState<CustomerProfile[]>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('sf_v8');
-      if (saved) { try { return JSON.parse(saved); } catch (e) {} }
-    }
-    return initialCustomers;
-  });
-
-  const [activeCustomerId, setActiveCustomerId] = useState<string>(customers[0]?.id || 'cust-1');
+  // Server and first client render use the same mock data; localStorage is read after mount.
+  const [state, setState] = useState<AppState>(initialState);
+  const [hydrated, setHydrated] = useState(false);
+  const [lastSync, setLastSync] = useState(0);
+  const stateRef = useRef(state);
+  // Actions read the latest committed state from this ref (timeouts, async fetches).
+  useLayoutEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+  const remote = useRef(false);
+  const bc = useRef<BroadcastChannel | null>(null);
 
   useEffect(() => {
-    if (typeof window !== 'undefined') localStorage.setItem('sf_v8', JSON.stringify(customers));
-  }, [customers]);
-
-  const activeCustomer = customers.find((c) => c.id === activeCustomerId) || customers[0];
-
-  const sendChatMessage = (text: string, sender: 'customer' | 'bot' | 'agent' = 'customer') => {
-    setCustomers((prev) =>
-      prev.map((cust) => {
-        if (cust.id !== activeCustomerId) return cust;
-        const newMsg = {
-          id: 'msg-' + Date.now(),
-          sender,
-          text,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        };
-        const updatedTranscript = [...cust.chatTranscript, newMsg];
-        let updatedHazard = cust.detectedHazard;
-        let updatedRisk = cust.riskScore;
-        let updatedUrgency = cust.urgency;
-        let updatedDraft = { ...cust.claimDraft };
-
-        if (text.toLowerCase().match(/freeze|pipe|cold|agua|helada|frio|fregadero|banging/i) && sender === 'customer') {
-          updatedHazard = 'Freezing Pipes Hazard';
-          updatedRisk = Math.min(98, cust.riskScore + 10);
-          updatedUrgency = 'High';
-          updatedDraft = {
-            id: 'DRF-99',
-            hazardType: 'Winter Freeze Plumbing Emergency',
-            estimatedLoss: 3500,
-            description: `Automated detection: "${text}"`,
-            timestamp: new Date().toLocaleString(),
-            status: 'drafted',
-          };
-          updatedTranscript.push({
-            id: 'msg-w-' + Date.now(),
-            sender: 'bot',
-            text: cust.language === 'es' ? '⚠️ Reclamo por $3,500 creado para plomero.' : '⚠️ Pre-filed claim draft for $3,500 created.',
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          });
+    // Hydration-safe load: server and first client render use mock data, then we read
+    // localStorage here after mount. This setState is intentional.
+    try {
+      const saved = localStorage.getItem(KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved) as AppState;
+        if (parsed?.customers?.length && parsed.claims) {
+          remote.current = true;
+          // eslint-disable-next-line react-hooks/set-state-in-effect
+          setState(parsed);
         }
+      }
+    } catch {}
+    setHydrated(true);
 
-        return {
-          ...cust,
-          chatTranscript: updatedTranscript,
-          detectedHazard: updatedHazard,
-          riskScore: updatedRisk,
-          urgency: updatedUrgency,
-          claimDraft: updatedDraft,
-          checkInStatus: 'urgent_attention',
-        };
-      })
-    );
+    const apply = (s: AppState) => {
+      remote.current = true;
+      setState(s);
+      setLastSync(Date.now());
+    };
+    try {
+      bc.current = new BroadcastChannel(CHANNEL);
+      bc.current.onmessage = (e) => e.data?.type === 'state' && apply(e.data.state);
+    } catch {}
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === KEY && e.newValue) {
+        try {
+          apply(JSON.parse(e.newValue));
+        } catch {}
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+      bc.current?.close();
+    };
+  }, []);
+
+  // Persist + broadcast every local write (stand-in for SpacetimeDB reducers).
+  useEffect(() => {
+    if (!hydrated) return;
+    if (remote.current) {
+      remote.current = false;
+      return;
+    }
+    try {
+      localStorage.setItem(KEY, JSON.stringify(state));
+      bc.current?.postMessage({ type: 'state', state });
+    } catch {}
+  }, [state, hydrated]);
+
+  const update = (fn: (s: AppState) => AppState) => setState((s) => fn(s));
+  const cust = (id: string) => stateRef.current.customers.find((c) => c.id === id)!;
+
+  const patchCustomer: Ctx['patchCustomer'] = (custId, p) =>
+    update((s) => ({ ...s, customers: s.customers.map((c) => (c.id === custId ? { ...c, ...p } : c)) }));
+
+  const appendLine: Ctx['appendLine'] = (custId, line) =>
+    update((s) => ({
+      ...s,
+      transcripts: {
+        ...s.transcripts,
+        [custId]: [...(s.transcripts[custId] || []), { ...line, id: uid(), time: line.time || nowTime() } as Line],
+      },
+    }));
+
+  const applyHazard: Ctx['applyHazard'] = (custId, reported) => {
+    const c = cust(custId);
+    const h = hazardFor(c, reported);
+    const existing = stateRef.current.claims[custId];
+    const claim: ClaimFlow =
+      existing && existing.status !== 'none'
+        ? existing
+        : { id: 'DRF-99', status: 'draft', type: h.type, amount: h.amount, description: `Reported by policyholder: ${reported || h.hazard}`, confirmed: {} };
+    update((s) => ({
+      ...s,
+      claims: { ...s.claims, [custId]: claim },
+      customers: s.customers.map((x) =>
+        x.id === custId
+          ? { ...x, riskScore: Math.min(98, x.riskScore + 10), urgency: 'High', detectedHazard: h.hazard, checkInStatus: 'urgent_attention' }
+          : x,
+      ),
+    }));
+    return claim;
   };
 
-  const approveClaimDraft = (customerId: string) => {
-    setCustomers((prev) =>
-      prev.map((cust) => {
-        if (cust.id !== customerId) return cust;
-        confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
-        return {
-          ...cust,
-          claimDraft: {
-            ...cust.claimDraft,
-            status: 'approved',
-            approvedAt: new Date().toLocaleString(),
-            claimNumber: 'SF-CLM-2026-' + Math.floor(Math.random() * 9000 + 1000),
-            adjusterNotes: 'Approved via 1-click FastTrack workflow.',
-          },
-          checkInStatus: 'completed',
-        };
-      })
-    );
+  const runTools: Ctx['runTools'] = (custId, steps) => {
+    update((s) => ({ ...s, toolRuns: { ...s.toolRuns, [custId]: steps.map((t) => ({ name: t.name, output: t.output, status: 'queued' })) } }));
+    const setStatus = (i: number, status: ToolCall['status']) =>
+      update((s) => ({
+        ...s,
+        toolRuns: { ...s.toolRuns, [custId]: (s.toolRuns[custId] || []).map((t, j) => (j === i ? { ...t, status } : t)) },
+      }));
+    steps.forEach((t, i) => {
+      setTimeout(() => {
+        if (stateRef.current.agentTakeover[custId]) return;
+        setStatus(i, 'running');
+      }, 600 * i + 50);
+      setTimeout(() => {
+        if (stateRef.current.agentTakeover[custId]) return setStatus(i, 'paused');
+        setStatus(i, 'done');
+        t.effect?.();
+      }, 600 * i + 550);
+    });
   };
 
-  const updateCustomerLanguage = (customerId: string, lang: 'en' | 'es') => {
-    setCustomers((prev) => prev.map((c) => (c.id === customerId ? { ...c, language: lang } : c)));
+  /** Default Nemotron plan for a hazard: risk → claim → emergency contact. */
+  const hazardPlan = (custId: string, reported: string, channel: 'chat' | 'call'): ToolStep[] => {
+    const c = cust(custId);
+    const h = hazardFor(c, reported);
+    return [
+      { name: 'assess_risk_and_update_score', output: `risk ${c.riskScore} → ${Math.min(98, c.riskScore + 10)} · ${h.hazard}`, effect: () => applyHazard(custId, reported) },
+      { name: 'auto_file_claim', output: `DRF-99 · ${h.type} · $${h.amount.toLocaleString()}`, effect: () => appendLine(custId, { kind: 'claim', text: '', channel }) },
+      {
+        name: 'trigger_emergency_contact',
+        output: `SMS → ${c.emergencyContact.name} (${c.emergencyContact.relationship})`,
+        effect: () => appendLine(custId, { kind: 'event', text: `trigger_emergency_contact → SMS sent to ${c.emergencyContact.name}`, dot: 'blue' }),
+      },
+    ];
   };
 
-  const simulateHazardDetection = (customerId: string, hazardDescription: string, estimatedLoss: number) => {
-    setCustomers((prev) =>
-      prev.map((c) => {
-        if (c.id !== customerId) return c;
-        return {
-          ...c,
-          detectedHazard: hazardDescription,
-          riskScore: 95,
-          urgency: 'High',
-          checkInStatus: 'urgent_attention',
-          claimDraft: {
-            id: 'DRF-SIM',
-            hazardType: hazardDescription,
-            estimatedLoss,
-            description: `Simulation: ${hazardDescription}`,
-            timestamp: new Date().toLocaleString(),
-            status: 'drafted',
-          },
-        };
-      })
-    );
+  const sendChatMessage: Ctx['sendChatMessage'] = async (text) => {
+    const custId = stateRef.current.activeCustomerId;
+    const c = cust(custId);
+    appendLine(custId, { kind: 'cust', text, channel: 'chat' });
+    if (/person|persona/i.test(text)) return 'person';
+    try {
+      const res = await fetch('/api/nemotron-agent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerId: custId,
+          message: text,
+          lang: c.language,
+          customer: { name: c.name, age: c.age, livesAlone: c.livesAlone, hazard: c.detectedHazard, risk: c.riskScore, contact: c.emergencyContact.name },
+        }),
+      });
+      if (!res.ok) throw new Error('bad response');
+      const data: { reply: string; toolCalls: { name: string; output: string }[] } = await res.json();
+      appendLine(custId, { kind: 'ai', text: data.reply, channel: 'chat' });
+      if (data.toolCalls?.length) {
+        const plan = hazardPlan(custId, text, 'chat');
+        runTools(
+          custId,
+          data.toolCalls.map((tc) => ({ name: tc.name, output: tc.output, effect: plan.find((p) => p.name === tc.name)?.effect })),
+        );
+        return 'hazard';
+      }
+      return 'ok';
+    } catch {
+      // Offline fallback: keyword detection.
+      const hz = HAZARD_RE.test(text);
+      const es = c.language === 'es';
+      appendLine(custId, {
+        kind: 'ai',
+        channel: 'chat',
+        text: hz
+          ? es
+            ? 'Parece una tubería congelada. No la descongele con fuego. Ya inicié un reclamo por daño de agua; no tiene que llenar formularios.'
+            : 'That sounds like a frozen pipe. Please don’t thaw it with an open flame. I’ve started a water-damage claim for you, so you won’t need to fill in any forms.'
+          : es
+            ? 'Qué bueno. Deje gotear las llaves esta noche. Le escribo de nuevo en la mañana.'
+            : 'Glad to hear it. Let faucets drip tonight and open the cabinets under your sinks. I’ll check in again in the morning.',
+      });
+      if (hz) runTools(custId, hazardPlan(custId, text, 'chat'));
+      return hz ? 'hazard' : 'ok';
+    }
   };
 
-  const resetToDefaults = () => {
-    setCustomers(initialCustomers);
-    setActiveCustomerId(initialCustomers[0].id);
-    if (typeof window !== 'undefined') localStorage.removeItem('sf_v8');
+  const confirmClaimField: Ctx['confirmClaimField'] = (custId, key, source) =>
+    update((s) => {
+      const cl = s.claims[custId];
+      if (!cl) return s;
+      const confirmed = { ...cl.confirmed };
+      if (source) confirmed[key] = source;
+      else delete confirmed[key];
+      return { ...s, claims: { ...s.claims, [custId]: { ...cl, confirmed } } };
+    });
+
+  const submitClaim: Ctx['submitClaim'] = (custId) => {
+    const cl = stateRef.current.claims[custId];
+    const num = cl?.number || 'SF-CLM-2026-' + String(4000 + Math.floor(Math.random() * 999));
+    update((s) => ({
+      ...s,
+      claims: { ...s.claims, [custId]: { ...s.claims[custId], status: s.claims[custId].status === 'approved' ? 'approved' : 'submitted', number: num, submittedAt: nowTime() } },
+    }));
+    appendLine(custId, { kind: 'event', text: `Policyholder submitted ${cl?.id} → ${num}`, dot: 'lavender' });
+    return num;
   };
 
-  return (
-    <StateFarmContext.Provider value={{ customers, activeCustomerId, setActiveCustomerId, activeCustomer, sendChatMessage, approveClaimDraft, updateCustomerLanguage, simulateHazardDetection, resetToDefaults }}>
-      {children}
-    </StateFarmContext.Provider>
-  );
+  const approveClaimDraft: Ctx['approveClaimDraft'] = (custId) => {
+    const cl = stateRef.current.claims[custId];
+    if (!cl || cl.status === 'none' || cl.status === 'approved') return null;
+    const num = cl.number || 'SF-CLM-2026-' + String(4000 + Math.floor(Math.random() * 999));
+    update((s) => ({
+      ...s,
+      claims: { ...s.claims, [custId]: { ...s.claims[custId], status: 'approved', number: num, approvedAt: nowTime() } },
+      customers: s.customers.map((x) => (x.id === custId ? { ...x, checkInStatus: 'completed' } : x)),
+    }));
+    appendLine(custId, { kind: 'event', text: `${cl.id} approved → ${num} · crew dispatched`, dot: 'blue' });
+    return num;
+  };
+
+  const createContactRequest: Ctx['createContactRequest'] = (custId, channel, topic, fromCall) => {
+    const s0 = stateRef.current;
+    const id = 'HN-REQ-' + (1041 + s0.reqSeq);
+    const req: ContactRequest = {
+      id,
+      custId,
+      channel,
+      topic,
+      lang: cust(custId).language,
+      status: 'waiting',
+      createdAt: Date.now(),
+      position: s0.contactRequests.filter((r) => r.status === 'waiting').length + 1,
+      fromCall,
+    };
+    update((s) => ({ ...s, reqSeq: s.reqSeq + 1, contactRequests: [...s.contactRequests.filter((r) => !(r.custId === custId && r.status !== 'closed')), req] }));
+    appendLine(custId, { kind: 'event', text: `${id} · wants a person · ${channel}${fromCall ? ' (transfer from Nora call)' : ''}`, dot: 'red' });
+    return id;
+  };
+
+  const stepIn: Ctx['stepIn'] = (custId) => {
+    const s0 = stateRef.current;
+    if (s0.agentTakeover[custId]) return;
+    const c = cust(custId);
+    const cl = s0.claims[custId];
+    const items = [
+      `${first(c.name)}, ${c.age}, ${c.livesAlone ? 'lives alone' : 'not alone'}, prefers ${c.language === 'es' ? 'Spanish' : 'English'}.`,
+      `Hazard: ${c.detectedHazard}. Risk ${c.riskScore}.`,
+      (s0.toolRuns[custId] || []).length ? `Nora ran ${(s0.toolRuns[custId] || []).filter((t) => t.status === 'done').map((t) => t.name).join(', ') || 'no tools yet'}.` : 'No Nora tool run yet.',
+      cl && cl.status !== 'none' ? `Claim ${cl.number || cl.id} (${cl.status}) · $${cl.amount.toLocaleString()} · ${cl.type}.` : 'No claim drafted.',
+      `Next: confirm safety, then ${cl?.status === 'draft' || cl?.status === 'submitted' ? 'approve the claim and dispatch' : 'decide whether to open a claim'}.`,
+    ];
+    update((s) => ({
+      ...s,
+      agentTakeover: { ...s.agentTakeover, [custId]: true },
+      callStatus: { ...s.callStatus, [custId]: 'agent' },
+      toolRuns: { ...s.toolRuns, [custId]: (s.toolRuns[custId] || []).map((t) => (t.status === 'done' ? t : { ...t, status: 'paused' })) },
+    }));
+    appendLine(custId, { kind: 'handoff', text: '', items });
+    appendLine(custId, { kind: 'event', text: 'Jordan M. joined · Nora paused', dot: 'blue' });
+  };
+
+  const acceptContactRequest: Ctx['acceptContactRequest'] = (id) => {
+    const r = stateRef.current.contactRequests.find((x) => x.id === id);
+    if (!r) return;
+    update((s) => ({ ...s, contactRequests: s.contactRequests.map((x) => (x.id === id ? { ...x, status: 'accepted' } : x)) }));
+    stepIn(r.custId);
+    appendLine(r.custId, { kind: 'event', text: `Accepted ${r.id} · ${r.channel} · ${r.topic}`, dot: 'red' });
+  };
+
+  const cancelContactRequest: Ctx['cancelContactRequest'] = (custId) =>
+    update((s) => ({ ...s, contactRequests: s.contactRequests.filter((r) => !(r.custId === custId && r.status !== 'closed')) }));
+
+  const sendAgentMessage: Ctx['sendAgentMessage'] = (custId, text) => {
+    appendLine(custId, { kind: 'agent', text, channel: 'call' });
+    // Background demo customers answer on their own; the active policyholder answers from the portal.
+    if (custId !== stateRef.current.activeCustomerId) {
+      const es = cust(custId).language === 'es';
+      setTimeout(
+        () => appendLine(custId, { kind: 'cust', channel: 'call', text: es ? 'Gracias, mijo. Muy amable.' : 'Oh, thank you. It’s nice to hear a real person.', tr: es ? 'Thank you, dear. Very kind.' : undefined }),
+        1600,
+      );
+    }
+  };
+
+  const setPriorityOverride: Ctx['setPriorityOverride'] = (custId, tier) => {
+    update((s) => ({ ...s, priorityOverride: { ...s.priorityOverride, [custId]: tier } }));
+    appendLine(custId, { kind: 'event', text: tier ? `Priority set to ${tier} by Jordan M.` : 'Priority returned to AI ranking', dot: 'lavender' });
+  };
+
+  const value: Ctx = {
+    ...state,
+    hydrated,
+    lastSync,
+    activeCustomer: state.customers.find((c) => c.id === state.activeCustomerId) || state.customers[0],
+    setActiveCustomerId: (id) => update((s) => ({ ...s, activeCustomerId: id })),
+    updateCustomerLanguage: (id, lang) => patchCustomer(id, { language: lang }),
+    appendLine,
+    applyHazard,
+    runTools,
+    runHazardPlan: (custId, reported, channel) => runTools(custId, hazardPlan(custId, reported, channel)),
+    sendChatMessage,
+    confirmClaimField,
+    submitClaim,
+    approveClaimDraft,
+    createContactRequest,
+    acceptContactRequest,
+    cancelContactRequest,
+    stepIn,
+    sendAgentMessage,
+    setPriorityOverride,
+    setCallStatus: (custId, cs) => update((s) => ({ ...s, callStatus: { ...s.callStatus, [custId]: cs } })),
+    patchCustomer,
+    resetToDefaults: () => {
+      try {
+        localStorage.removeItem(KEY);
+      } catch {}
+      setState(initialState());
+    },
+  };
+
+  return <StateFarmContext.Provider value={value}>{children}</StateFarmContext.Provider>;
 };
 
 export const useStore = () => {

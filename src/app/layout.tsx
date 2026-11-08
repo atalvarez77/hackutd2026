@@ -1,41 +1,38 @@
-import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
-import "./globals.css";
-import { StateFarmProvider } from "@/context/StateFarmContext";
-import { Navbar } from "@/components/Navbar";
+import type { Metadata } from 'next';
+import { Kanit, Plus_Jakarta_Sans, Space_Mono } from 'next/font/google';
+import './globals.css';
+import { StateFarmProvider } from '@/context/StateFarmContext';
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
+const kanit = Kanit({
+  variable: '--font-kanit',
+  subsets: ['latin'],
+  weight: ['700', '900'],
+  style: ['normal', 'italic'],
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
+const jakarta = Plus_Jakarta_Sans({
+  variable: '--font-jakarta',
+  subsets: ['latin'],
+  style: ['normal', 'italic'],
+});
+
+const spaceMono = Space_Mono({
+  variable: '--font-space-mono',
+  subsets: ['latin'],
+  weight: ['400', '700'],
 });
 
 export const metadata: Metadata = {
-  title: "State Farm | Good Neighbor SafetyNet",
-  description: "Proactive Policyholder Welfare & Automated Emergency Hazard Response",
+  title: 'HeyNeighbor · We knock first.',
+  description: 'Nora, State Farm’s AI neighbor: proactive welfare calls, risk triage and pre-filed claims during extreme weather.',
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
-      <body className="min-h-full flex flex-col bg-slate-950 text-slate-100">
-        <StateFarmProvider>
-          <Navbar />
-          <main className="flex-1 flex flex-col">{children}</main>
-        </StateFarmProvider>
+    <html lang="en" className={`${kanit.variable} ${jakarta.variable} ${spaceMono.variable} h-full antialiased`}>
+      <body className="min-h-full flex flex-col">
+        <StateFarmProvider>{children}</StateFarmProvider>
       </body>
     </html>
   );
 }
-
