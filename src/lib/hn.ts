@@ -47,7 +47,9 @@ export function hexId(seed: string, groups = 2) {
   return out.join(' ');
 }
 
-export const money = (n: number) => '$' + n.toLocaleString('en-US');
+export const money = (n: number | null | undefined = 0) => 
+  `$${(n ?? 0).toLocaleString('en-US')}`;
+
 
 export function nowTime() {
   return new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
