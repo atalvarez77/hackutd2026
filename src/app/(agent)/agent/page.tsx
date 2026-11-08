@@ -351,7 +351,11 @@ export default function AgentConsolePage() {
               selectedId={c.id}
               catOn={store.catMode.on}
               callLabel={(x) => callText(x)[0]}
-              onSelect={(id) => setSel(id)}
+              onSelect={(id) => {
+                setSel(id);
+                // Picking someone on the map also switches the portal to them (same as "Portal user").
+                store.setActiveCustomerId(id);
+              }}
               onOpen={(id) => {
                 setSel(id);
                 setView('queue');
