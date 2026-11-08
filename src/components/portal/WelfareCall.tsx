@@ -2,18 +2,16 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from '@/context/StateFarmContext';
-import { NoraWave } from '@/components/ui/NoraWave';
-import { LogoMark } from '@/components/brand/Logo';
 import { NORA_PHONE, coverageVerdict, first, HAZARD_RE, isWaterHazard, money, NO_RE, OK_RE, PERSON_RE, YES_RE } from '@/lib/hn';
-import type { CustomerProfile } from '@/types/statefarm';
+import type { CustomerProfile, Language } from '@/types/statefarm';
 import { tx } from '@/lib/i18n';
+import { pickVoice, warmVoices, type Speaker } from '@/lib/voice';
 
 /**
  * The welfare call is the policyholder's whole experience: a normal cell-phone call. It goes
  * from "hello" to a submitted claim (or a transfer to a person) without leaving the call.
- * On desktop it's drawn inside a phone frame; on a real phone the frame drops away. Every line is written to the shared transcript, so the
- * agent console sees it live, and every confirmation is written to the claim, so the claim
- * page shows it as already done.
+ * Left: a stock iPhone call screen (keypad works: 1 = person, 2 = repeat, 3 = Spanish/English).
+ * Right: the live transcript, plus demo controls standing in for the caller's voice.
  */
 
 type Stage = 'greet' | 'details' | 'fix' | 'safety' | 'photos' | 'coverage' | 'submitted' | 'closing' | 'transfer';
@@ -43,8 +41,8 @@ function lines(c: CustomerProfile, hazard: string, claimType: string) {
   const { covered } = coverageVerdict(c, hazard + ' ' + claimType);
   return {
     greet: {
-      en: `Hi ${f}, this is Nora, State Farm’s AI assistant. There’s a ${c.weatherAlert.title.toLowerCase()} in ${c.city} tonight. How are you and the house holding up? You can ask for a person anytime.`,
-      es: `Hola ${f}, le habla Nora, la asistente de IA de State Farm. Hay una alerta del clima en ${c.city} esta noche. ¿Cómo están usted y su casa? Puede pedir hablar con una persona cuando quiera.`,
+      en: `Hi ${f}, this is Nora, State Farm’s AI assistant, calling about the ${c.weatherAlert.title.toLowerCase()} in ${c.city}. How are you and the house holding up? To reach a person at any time, press 1. To hear something again, press 2. Para español, oprima 3.`,
+      es: `Hola ${f}, le habla Nora, la asistente de IA de State Farm, por la alerta del clima en ${c.city}. ¿Cómo están usted y su casa? Para hablar con una persona, oprima 1. Para repetir, oprima 2. For English, press 3.`,
     },
     details: {
       en: `I’m sorry, that sounds like ${spokenEn}. I’ve started a claim for you using what State Farm already has, so there are no forms. Let me check a few details. It started around 6 this morning at ${addr}. Is that right?`,
@@ -63,8 +61,8 @@ function lines(c: CustomerProfile, hazard: string, claimType: string) {
       es: 'Así se hace: busque la válvula redonda donde entra el agua a la casa y gírela a la derecha hasta que se detenga. También le mando los pasos por mensaje. ',
     },
     photos: {
-      en: 'Good, I’ve noted that everyone is safe. Photos help but aren’t required. You can add them in your portal later, or the adjuster will take them at the inspection.',
-      es: 'Bien, anoté que todos están a salvo. Las fotos ayudan pero no son obligatorias. Puede subirlas después en su portal, o el ajustador las tomará en la inspección.',
+      en: 'Good, I’ve noted that everyone is safe. Photos help but aren’t required. You can add them later, or the adjuster will take them at the inspection.',
+      es: 'Bien, anoté que todos están a salvo. Las fotos ayudan pero no son obligatorias. Puede subirlas después, o el ajustador las tomará en la inspección.',
     },
     coverage: covered
       ? {
@@ -76,12 +74,12 @@ function lines(c: CustomerProfile, hazard: string, claimType: string) {
           es: `Revisé su póliza (${tx(c.policy.type, 'es')}). Puede que no esté cubierto porque no tiene endoso de respaldo de agua, pero un agente lo revisará con usted. ¿Quiere que lo envíe para que lo revisen?`,
         },
     submitted: (num: string) => ({
-      en: `Done. Your claim number is ${num}. An adjuster will be assigned within 24 hours, and you’ll get a text at each step. Is there anything else, or would you like to talk to a person?`,
-      es: `Listo. Su número de reclamo es ${num}. Le asignarán un ajustador en 24 horas y recibirá un mensaje en cada paso. ¿Algo más, o quiere hablar con una persona?`,
+      en: `Done. Your claim number is ${num}. An adjuster will be assigned within 24 hours, and you’ll get a text at each step. Is there anything else?`,
+      es: `Listo. Su número de reclamo es ${num}. Le asignarán un ajustador en 24 horas y recibirá un mensaje en cada paso. ¿Algo más?`,
     }),
     draftSaved: {
-      en: 'Okay, I saved it as a draft. You can submit it from your portal anytime. Anything else?',
-      es: 'Está bien, lo guardé como borrador. Puede enviarlo desde su portal cuando quiera. ¿Algo más?',
+      en: 'Okay, I saved it as a draft. You can submit it any time. Anything else?',
+      es: 'Está bien, lo guardé como borrador. Puede enviarlo cuando quiera. ¿Algo más?',
     },
     ok: {
       en: 'I’m glad you’re safe. Tonight, let your faucets drip and open the cabinets under your sinks. I’ll check in again at 8 AM. Is there anything else?',
@@ -91,9 +89,13 @@ function lines(c: CustomerProfile, hazard: string, claimType: string) {
       en: 'Of course. I’m connecting you to Jordan, a State Farm agent. They already have everything we talked about, so you won’t have to repeat yourself. Please stay on the line.',
       es: 'Claro. Le comunico con Jordan, un agente de State Farm. Ya tiene todo lo que hablamos, así que no tendrá que repetir nada. Por favor no cuelgue.',
     },
+    switched: {
+      en: 'Sure, let’s continue in English.',
+      es: 'Claro, seguimos en español.',
+    },
     bye: {
-      en: 'Thanks for talking with me. Stay warm, and I’ll check in again at 8 AM. Goodbye.',
-      es: 'Gracias por hablar conmigo. Cuídese del frío y le llamo otra vez a las 8 AM. Hasta luego.',
+      en: 'Thanks for talking with me. Stay safe, and I’ll check in again at 8 AM. Goodbye.',
+      es: 'Gracias por hablar conmigo. Cuídese y le llamo otra vez a las 8 AM. Hasta luego.',
     },
   };
 }
@@ -102,20 +104,43 @@ const CHIPS: Record<Stage, (c: CustomerProfile) => Pair[]> = {
   greet: (c) => [
     { en: HAZARD_REPLY[c.id]?.[0] ?? 'Something’s wrong at the house', es: HAZARD_REPLY[c.id]?.[1] ?? 'Hay un problema en la casa' },
     { en: 'I’m okay', es: 'Estoy bien' },
-    { en: 'I need a person', es: 'Necesito una persona' },
   ],
-  details: () => [{ en: 'Yes, that’s right', es: 'Sí, es correcto' }, { en: 'No, something’s different', es: 'No, algo es diferente' }, { en: 'I need a person', es: 'Necesito una persona' }],
+  details: () => [{ en: 'Yes, that’s right', es: 'Sí, es correcto' }, { en: 'No, something’s different', es: 'No, algo es diferente' }],
   fix: () => [{ en: 'It started around 3 AM', es: 'Empezó como a las 3 AM' }, { en: 'It’s in the bathroom, not the kitchen', es: 'Es en el baño, no en la cocina' }],
-  safety: () => [{ en: 'Everyone’s safe', es: 'Todos estamos bien' }, { en: 'I need help shutting it off', es: 'Necesito ayuda para cerrarla' }, { en: 'I need a person', es: 'Necesito una persona' }],
+  safety: () => [{ en: 'Everyone’s safe', es: 'Todos estamos bien' }, { en: 'I need help shutting it off', es: 'Necesito ayuda para cerrarla' }],
   photos: () => [{ en: 'Skip photos for now', es: 'Sin fotos por ahora' }, { en: 'I’ll add them later', es: 'Las subo después' }],
-  coverage: () => [{ en: 'Yes, submit it', es: 'Sí, envíelo' }, { en: 'Not yet', es: 'Todavía no' }, { en: 'I need a person', es: 'Necesito una persona' }],
-  submitted: () => [{ en: 'That’s all, thanks', es: 'Es todo, gracias' }, { en: 'I’d like to talk to a person', es: 'Quiero hablar con una persona' }],
-  closing: () => [{ en: 'That’s all, thanks', es: 'Es todo, gracias' }, { en: 'I’d like to talk to a person', es: 'Quiero hablar con una persona' }],
+  coverage: () => [{ en: 'Yes, submit it', es: 'Sí, envíelo' }, { en: 'Not yet', es: 'Todavía no' }],
+  submitted: () => [{ en: 'That’s all, thanks', es: 'Es todo, gracias' }],
+  closing: () => [{ en: 'That’s all, thanks', es: 'Es todo, gracias' }],
   transfer: () => [{ en: 'Okay, I’ll wait', es: 'Está bien, espero' }, { en: 'Thank you', es: 'Gracias' }],
 };
 
 // Minimal typing for the Web Speech API (not in lib.dom for all TS versions).
 type Recognition = { lang: string; interimResults: boolean; start: () => void; stop: () => void; onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null; onend: (() => void) | null; onerror: (() => void) | null };
+
+/* ---------- Keypad tones (real DTMF pairs) ---------- */
+const DTMF: Record<string, [number, number]> = {
+  '1': [697, 1209], '2': [697, 1336], '3': [697, 1477], '4': [770, 1209], '5': [770, 1336], '6': [770, 1477],
+  '7': [852, 1209], '8': [852, 1336], '9': [852, 1477], '*': [941, 1209], '0': [941, 1336], '#': [941, 1477],
+};
+let audio: AudioContext | null = null;
+/** Wall-clock read for event handlers (kept outside the component body). */
+const clockNow = () => Date.now();
+function tone(k: string) {
+  try {
+    audio ||= new AudioContext();
+    const g = audio.createGain();
+    g.gain.value = 0.06;
+    g.connect(audio.destination);
+    for (const f of DTMF[k] || []) {
+      const o = audio.createOscillator();
+      o.frequency.value = f;
+      o.connect(g);
+      o.start();
+      o.stop(audio.currentTime + 0.16);
+    }
+  } catch {}
+}
 
 export function WelfareCall() {
   const store = useStore();
@@ -125,13 +150,18 @@ export function WelfareCall() {
   const [stage, setStage] = useState<Stage>('greet');
   const [speaking, setSpeaking] = useState(false);
   const [voice, setVoice] = useState(true);
+  const [muted, setMuted] = useState(false);
   const [listening, setListening] = useState(false);
   const [typed, setTyped] = useState('');
+  const [keypad, setKeypad] = useState(false);
+  const [digits, setDigits] = useState('');
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [now, setNow] = useState(0);
   const recRef = useRef<Recognition | null>(null);
   const endAfterSpeak = useRef(false);
   const spokenAgent = useRef<Set<string>>(new Set());
+  const lastSaid = useRef<Pair | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   const claim = claims[c.id];
   const req = contactRequests.find((r) => r.custId === c.id && r.status !== 'closed');
@@ -139,19 +169,21 @@ export function WelfareCall() {
   const live = status === 'ai' || status === 'agent';
   const callLines = (transcripts[c.id] || []).filter((l) => l.channel === 'call' && (l.kind === 'ai' || l.kind === 'cust' || l.kind === 'agent'));
 
-  // The portal keys this component by customer id, so switching policyholder resets it.
-  // Stop speaking and listening when the call card unmounts.
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    warmVoices();
+    return () => {
       try {
         speechSynthesis.cancel();
       } catch {}
       recRef.current?.stop();
-    },
-    [],
-  );
+    };
+  }, []);
 
-  const speak = (text: string, lang: 'en' | 'es', after?: () => void) => {
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+  }, [callLines.length]);
+
+  const speak = (text: string, lang: Language, after?: () => void, who: Speaker = 'nora') => {
     setSpeaking(true);
     let finished = false;
     const done = () => {
@@ -164,8 +196,11 @@ export function WelfareCall() {
       try {
         const u = new SpeechSynthesisUtterance(text);
         u.lang = lang === 'es' ? 'es-MX' : 'en-US';
-        u.rate = 0.95;
-        u.onend = () => setTimeout(done, 600);
+        const v = pickVoice(lang, who);
+        if (v) u.voice = v;
+        u.rate = who === 'nora' ? 1 : 0.97;
+        u.pitch = who === 'nora' ? 1.08 : 0.9;
+        u.onend = () => setTimeout(done, 500);
         u.onerror = () => done();
         speechSynthesis.speak(u);
         // Safety net: some browsers never fire onend.
@@ -177,8 +212,8 @@ export function WelfareCall() {
   };
 
   /** Nora says a line: transcript (with English translation for Spanish lines) + voice. */
-  const say = (p: Pair, after?: () => void) => {
-    const lang = c.language;
+  const say = (p: Pair, after?: () => void, lang: Language = c.language) => {
+    lastSaid.current = p;
     store.appendLine(c.id, { kind: 'ai', channel: 'call', text: lang === 'es' ? p.es : p.en, tr: lang === 'es' ? p.en : undefined });
     speak(lang === 'es' ? p.es : p.en, lang, after);
   };
@@ -186,17 +221,17 @@ export function WelfareCall() {
   // Call timer (ticks only while connected).
   useEffect(() => {
     if (!live) return;
-    const iv = setInterval(() => setNow(Date.now()), 1000);
+    const iv = setInterval(() => setNow(clockNow()), 1000);
     return () => clearInterval(iv);
   }, [live]);
 
-  // Speak the agent's lines out loud once they've taken over the call.
+  // Speak the agent's lines out loud (male voice) once they've taken over the call.
   useEffect(() => {
     if (!live) return;
     const latest = callLines.filter((l) => l.kind === 'agent' && !spokenAgent.current.has(l.id));
     latest.forEach((l) => {
       spokenAgent.current.add(l.id);
-      speak(l.text, c.language);
+      speak(l.text, c.language, undefined, 'agent');
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [callLines.length, live]);
@@ -206,13 +241,15 @@ export function WelfareCall() {
       speechSynthesis.cancel();
     } catch {}
     callLines.forEach((l) => l.kind === 'agent' && spokenAgent.current.add(l.id));
-    setStartedAt(Date.now());
-    setNow(Date.now());
+    const t = clockNow();
+    setStartedAt(t);
+    setNow(t);
+    setDigits('');
+    setKeypad(false);
     store.setCallStatus(c.id, 'ai');
     store.appendLine(c.id, { kind: 'event', text: 'Welfare call connected · Nora on the line', dot: 'red' });
     setStage('greet');
-    const L = lines(c, c.detectedHazard, claim?.type || '');
-    say(L.greet);
+    say(lines(c, c.detectedHazard, claim?.type || '').greet);
   };
 
   const end = (note = 'Call ended by policyholder') => {
@@ -221,11 +258,20 @@ export function WelfareCall() {
     } catch {}
     recRef.current?.stop();
     setSpeaking(false);
+    setKeypad(false);
     store.setCallStatus(c.id, 'ended');
     store.appendLine(c.id, { kind: 'event', text: note, dot: 'lavender' });
   };
 
   const confirm = (keys: string[], source = ON_CALL) => keys.forEach((k) => store.confirmClaimField(c.id, k, source));
+
+  const transfer = (via: string) => {
+    if (stage === 'transfer' || takeover) return;
+    const L = lines(c, c.detectedHazard, claim?.type || '');
+    say(L.transfer);
+    store.createContactRequest(c.id, 'call', (c.detectedHazard === 'None' ? 'General question' : c.detectedHazard) + via, true);
+    setStage('transfer');
+  };
 
   /** One customer reply, from voice, a chip or typing. */
   const reply = (text: string) => {
@@ -236,12 +282,7 @@ export function WelfareCall() {
     const hazardNow = HAZARD_RE.test(text) ? 'Freezing Pipes Hazard' : c.detectedHazard;
     const L = lines(c, hazardNow, claim?.type || '');
 
-    if (PERSON_RE.test(text) && stage !== 'transfer') {
-      say(L.transfer);
-      store.createContactRequest(c.id, 'call', c.detectedHazard === 'None' ? 'General question' : c.detectedHazard, true);
-      setStage('transfer');
-      return;
-    }
+    if (PERSON_RE.test(text) && stage !== 'transfer') return transfer('');
 
     switch (stage) {
       case 'greet':
@@ -305,6 +346,37 @@ export function WelfareCall() {
     }
   };
 
+  /** Keypad: 1 or 0 = a person, 2 = repeat, 3 = switch language. */
+  const press = (k: string) => {
+    tone(k);
+    setDigits((d) => (d + k).slice(-14));
+    if (!live) return;
+    if (k === '1' || k === '0') {
+      store.appendLine(c.id, { kind: 'event', text: `Policyholder pressed ${k} · asked for a person`, dot: 'red' });
+      transfer(' · pressed ' + k);
+    } else if (k === '2' && lastSaid.current && !takeover) {
+      try {
+        speechSynthesis.cancel();
+      } catch {}
+      store.appendLine(c.id, { kind: 'event', text: 'Policyholder pressed 2 · Nora repeated', dot: 'lavender' });
+      speak(es ? lastSaid.current.es : lastSaid.current.en, c.language);
+    } else if (k === '3') {
+      const next: Language = es ? 'en' : 'es';
+      try {
+        speechSynthesis.cancel();
+      } catch {}
+      store.updateCustomerLanguage(c.id, next);
+      store.appendLine(c.id, { kind: 'event', text: `Policyholder pressed 3 · language → ${next === 'es' ? 'Spanish' : 'English'}`, dot: 'lavender' });
+      if (!takeover) {
+        const L = lines(c, c.detectedHazard, claim?.type || '');
+        const again = lastSaid.current;
+        const p = again ? { en: L.switched.en + ' ' + again.en, es: L.switched.es + ' ' + again.es } : L.switched;
+        say(p, undefined, next);
+        if (again) lastSaid.current = again;
+      }
+    }
+  };
+
   const toggleMic = () => {
     if (listening) {
       recRef.current?.stop();
@@ -330,236 +402,290 @@ export function WelfareCall() {
     rec.start();
   };
 
-
   const T = (en: string, sp: string) => (es ? sp : en);
-  const steps = [
-    { label: T('Damage', 'Daño'), done: !!claim && claim.status !== 'none' },
-    { label: T('Details', 'Datos'), done: !!claim?.confirmed?.where },
-    { label: T('Safety', 'Seguridad'), done: !!claim?.confirmed?.safe },
-    { label: T('Submitted', 'Enviado'), done: claim?.status === 'submitted' || claim?.status === 'approved' },
-  ];
   const secs = startedAt && now ? Math.max(0, Math.floor((now - startedAt) / 1000)) : null;
-  const clock = secs === null ? null : `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+  const clock = secs === null ? '0:00' : `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
   const ringing = status === 'ringing' || status === 'idle';
-  const claimNo = claim && (claim.status === 'submitted' || claim.status === 'approved') ? claim.number : undefined;
+  const claimNo = claim && (claim.status === 'submitted' || claim.status === 'approved') && callLines.length > 0 ? claim.number : undefined;
+  const callerName = takeover ? 'Jordan · State Farm' : 'State Farm';
 
   return (
-    <div id="call" className="w-full flex flex-col items-center gap-5 scroll-mt-[110px]">
-      {/* The phone. On desktop it gets a device frame; on a real phone the screen fills the card. */}
-      <div className="w-full lg:w-[360px] lg:h-[720px] min-h-[560px] rounded-3xl lg:rounded-[52px] lg:border-[10px] lg:border-[#0B0B0D] lg:shadow-[0_30px_60px_rgba(26,26,26,.22)] bg-[linear-gradient(180deg,#2A2A31_0%,#121214_100%)] text-white overflow-hidden flex flex-col">
-        <div className="hidden lg:flex items-center justify-between px-7 pt-3 text-[13px] font-semibold">
+    <div id="call" className="grid gap-6 items-stretch grid-cols-1 lg:grid-cols-[360px_minmax(0,1fr)] scroll-mt-[110px]">
+      {/* ---------- iPhone call screen ---------- */}
+      <div className="ios relative w-full max-w-[400px] mx-auto lg:w-[360px] h-[720px] rounded-[48px] lg:border-[10px] lg:border-[#111] lg:shadow-[0_24px_48px_rgba(0,0,0,.18)] overflow-hidden text-white bg-[radial-gradient(120%_80%_at_50%_0%,#6B6B72_0%,#3A3A3F_45%,#1C1C1E_100%)]">
+        <div className="flex items-center justify-between px-7 pt-3 text-[15px] font-semibold">
           <span>4:18</span>
-          <span className="w-[86px] h-[24px] rounded-full bg-black" />
+          <span className="w-[96px] h-[28px] rounded-full bg-black" />
           <span className="flex items-end gap-[2px]" aria-hidden>
-            {[5, 7, 9, 11].map((h) => (
+            {[4, 6, 8, 10].map((h) => (
               <i key={h} className="w-[3px] rounded-sm bg-white" style={{ height: h }} />
             ))}
-            <i className="ml-1.5 w-[22px] h-[11px] rounded-[3px] border border-white/80 p-[1px]">
-              <i className="block h-full w-3/4 rounded-[1px] bg-white" />
+            <i className="ml-1.5 w-[24px] h-[12px] rounded-[4px] border border-white/60 p-[1.5px]">
+              <i className="block h-full w-3/4 rounded-[2px] bg-white" />
             </i>
           </span>
         </div>
 
         {claimNo && (
-          <div className="mx-3 mt-3 rounded-2xl bg-white/95 text-charcoal px-3.5 py-2.5 flex gap-2.5 items-start hn-in">
-            <LogoMark size={28} />
-            <div className="flex flex-col min-w-0">
-              <span className="text-[11px] font-bold text-grey">{T('MESSAGES · NOW', 'MENSAJES · AHORA')}</span>
-              <span className="text-[13px] leading-snug">
-                {T(`State Farm: Claim ${claimNo} received. An adjuster will contact you within 24h.`, `State Farm: Recibimos su reclamo ${claimNo}. Un ajustador le contactará en 24h.`)}
+          <div className="absolute left-2.5 right-2.5 top-12 z-10 rounded-[22px] bg-[#F2F2F7]/95 text-black px-3.5 py-3 flex gap-3 items-start shadow-lg hn-in">
+            <span className="w-9 h-9 rounded-[9px] bg-[#34C759] flex items-center justify-center flex-none">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="#fff" aria-hidden>
+                <path d="M12 3C6.5 3 2 6.6 2 11c0 2.4 1.3 4.6 3.4 6.1L4.5 21l4.2-2.3c1 .3 2.1.4 3.3.4 5.5 0 10-3.6 10-8S17.5 3 12 3z" />
+              </svg>
+            </span>
+            <span className="flex-1 min-w-0 flex flex-col">
+              <span className="flex justify-between text-[14px]">
+                <span className="font-semibold">State Farm</span>
+                <span className="text-black/45">{T('now', 'ahora')}</span>
               </span>
-            </div>
+              <span className="text-[14px] leading-snug">
+                {T(`Claim ${claimNo} received. An adjuster will contact you within 24h.`, `Recibimos su reclamo ${claimNo}. Un ajustador le contactará en 24h.`)}
+              </span>
+            </span>
           </div>
         )}
 
         {ringing && (
-          <div className="flex-1 flex flex-col items-center text-center px-6 pt-10 pb-10">
-            <span className="text-[15px] text-[#B4A9BC]">{T('Incoming call · mobile', 'Llamada entrante · celular')}</span>
-            <span className="mt-7 w-24 h-24 rounded-full bg-sf-red flex items-center justify-center" style={{ animation: 'hnRing 1.6s ease-out infinite' }}>
-              <NoraWave speaking color="#fff" size={34} />
-            </span>
-            <span className="mt-5 font-display font-black text-[30px] leading-tight">State Farm · Nora</span>
-            <span className="font-mono text-[15px] text-[#B4A9BC]">{NORA_PHONE}</span>
-            <p className="mt-5 mb-8 text-[15px] leading-snug text-[#D9D2DE] max-w-[290px]">
-              {T(
-                'A quick storm check-in. If anything’s damaged, you can file the whole claim on this call. Nora is an AI assistant; ask for a person anytime.',
-                'Una llamada rápida por la tormenta. Si hay daños, puede hacer todo el reclamo en esta llamada. Nora es una asistente de IA; puede pedir una persona cuando quiera.',
-              )}
-            </p>
-            <div className="mt-auto w-full flex justify-around">
-              <RoundButton color="#ED1D24" label={T('Decline', 'Rechazar')} onClick={() => end('Policyholder declined the call')} hangup />
-              <RoundButton color="#1F9D63" label={T('Accept', 'Contestar')} onClick={accept} />
+          <div className="absolute inset-0 top-12 flex flex-col items-center px-6 pb-14">
+            <span className="mt-16 text-[17px] text-white/70">{T('mobile', 'celular')}</span>
+            <span className="mt-1 text-[38px] font-normal leading-tight text-center">State Farm</span>
+            <span className="text-[17px] text-white/70">{NORA_PHONE}</span>
+            <div className="mt-auto w-full flex justify-between px-6 text-[13px] text-white/90">
+              <span className="flex flex-col items-center gap-1.5">
+                <Glyph d="M12 7v5l3 2M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z" />
+                {T('Remind Me', 'Recordar')}
+              </span>
+              <span className="flex flex-col items-center gap-1.5">
+                <Glyph d="M4 5h16v11H8l-4 4z" />
+                {T('Message', 'Mensaje')}
+              </span>
+            </div>
+            <div className="mt-8 w-full flex justify-between px-4">
+              <CallButton color="#FF3B30" label={T('Decline', 'Rechazar')} onClick={() => end('Policyholder declined the call')} hangup />
+              <CallButton color="#34C759" label={T('Accept', 'Aceptar')} onClick={accept} pulse />
             </div>
           </div>
         )}
 
         {live && (
-          <div className="flex-1 min-h-0 flex flex-col px-6 pt-6 pb-7">
-            <div className="flex flex-col items-center text-center gap-1">
-              <span className="font-display font-black text-[26px] leading-tight">{takeover ? 'Jordan · State Farm' : 'State Farm · Nora'}</span>
-              <span className="font-mono text-[15px] text-[#B4A9BC]">{clock ?? T('Connected', 'Conectado')}</span>
-              <span className="h-7 flex items-center gap-2">
-                <NoraWave speaking={speaking} size={18} bars={7} width={3} color={speaking ? '#ED1D24' : '#6A6A74'} />
-                <span className="text-[13px] text-[#D9D2DE]">
-                  {takeover
-                    ? T('You’re talking with a person', 'Está hablando con una persona')
-                    : listening
-                      ? T('Listening…', 'Escuchando…')
-                      : speaking
-                        ? T('Nora is speaking', 'Nora está hablando')
-                        : T('Your turn', 'Su turno')}
-                </span>
-              </span>
-            </div>
+          <div className="absolute inset-0 top-12 flex flex-col items-center px-7 pb-12">
+            <span className="mt-10 text-[34px] font-normal leading-tight text-center">{keypad && digits ? digits : callerName}</span>
+            <span className="text-[17px] text-white/70">{keypad && digits ? callerName : clock}</span>
 
-            {req && (
-              <div className="mt-3 rounded-xl bg-white/10 px-3.5 py-2.5 text-[13px] text-center hn-in">
-                {takeover || req.status === 'accepted'
-                  ? T('Jordan accepted. Connecting you now.', 'Jordan aceptó. Le estamos comunicando.')
-                  : T('Transferring you to a person. You’re next in line.', 'Le estamos transfiriendo con una persona. Usted sigue.')}
-              </div>
-            )}
-
-            {/* Live captions */}
-            <div className="flex-1 min-h-0 mt-4 overflow-y-auto flex flex-col justify-end gap-3" aria-live="polite">
-              {callLines.slice(-4).map((l) => (
-                <div key={l.id} className="flex flex-col gap-0.5 hn-in">
-                  <span className="text-[11px] font-bold tracking-[.08em] uppercase" style={{ color: l.kind === 'cust' ? '#8E8798' : '#FF6B73' }}>
-                    {l.kind === 'ai' ? 'Nora' : l.kind === 'agent' ? 'Jordan' : T('You', 'Usted')}
-                  </span>
-                  <span className="text-[15px] leading-snug" style={{ color: l.kind === 'cust' ? '#B4A9BC' : '#fff' }}>
-                    {l.text}
-                  </span>
+            <div className="mt-auto w-full">
+              {keypad ? (
+                <div className="grid grid-cols-3 gap-x-6 gap-y-3.5 justify-items-center">
+                  {[
+                    ['1', ''], ['2', 'ABC'], ['3', 'DEF'], ['4', 'GHI'], ['5', 'JKL'], ['6', 'MNO'],
+                    ['7', 'PQRS'], ['8', 'TUV'], ['9', 'WXYZ'], ['*', ''], ['0', '+'], ['#', ''],
+                  ].map(([d, sub]) => (
+                    <button
+                      key={d}
+                      onClick={() => press(d)}
+                      className="w-[74px] h-[74px] rounded-full bg-white/20 active:bg-white/50 border-0 text-white cursor-pointer flex flex-col items-center justify-center leading-none"
+                    >
+                      <span className="text-[34px] font-light">{d}</span>
+                      {sub && <span className="text-[10px] font-semibold tracking-[.14em] mt-0.5">{sub}</span>}
+                    </button>
+                  ))}
                 </div>
-              ))}
+              ) : (
+                <div className="grid grid-cols-3 gap-x-6 gap-y-6 justify-items-center">
+                  <Control label={T('mute', 'silencio')} on={muted} onClick={() => setMuted(!muted)} d="M9 9v3a3 3 0 0 0 5.1 2.1M15 9.3V5a3 3 0 0 0-5.9-.7M19 11a7 7 0 0 1-1.1 3.8M5 11a7 7 0 0 0 11.6 5.3M12 18v3M4 4l16 16" />
+                  <Control label={T('keypad', 'teclado')} onClick={() => setKeypad(true)} dots />
+                  <Control
+                    label="audio"
+                    on={voice}
+                    onClick={() => {
+                      if (voice) speechSynthesis.cancel();
+                      setVoice(!voice);
+                    }}
+                    d="M4 10v4h4l5 4V6L8 10zM16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"
+                  />
+                  <Control label={T('add call', 'agregar')} d="M12 5v14M5 12h14" dim />
+                  <Control label="FaceTime" d="M3 7h12v10H3zM15 10l6-3v10l-6-3" dim />
+                  <Control label={T('contacts', 'contactos')} d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21c0-4 3.6-6 8-6s8 2 8 6" dim />
+                </div>
+              )}
             </div>
 
-            {claim && claim.status !== 'none' && (
-              <div className="mt-4 grid grid-cols-4 gap-1.5 hn-in">
-                {steps.map((s) => (
-                  <div key={s.label} className="flex flex-col gap-1">
-                    <span className="h-1 rounded" style={{ background: s.done ? '#ED1D24' : '#3A3A42' }} />
-                    <span className="text-[10px] font-bold" style={{ color: s.done ? '#fff' : '#8E8798' }}>
-                      {s.label}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div className="mt-5 grid grid-cols-2 justify-items-center">
-              <ControlButton on={listening} onClick={toggleMic} label={listening ? T('Listening', 'Escuchando') : T('Talk', 'Hablar')} icon="mic" />
-              <ControlButton
-                on={voice}
-                onClick={() => {
-                  if (voice) speechSynthesis.cancel();
-                  setVoice(!voice);
-                }}
-                label={T('Speaker', 'Altavoz')}
-                icon="speaker"
-              />
-            </div>
-            <div className="mt-5 flex justify-center">
-              <RoundButton color="#ED1D24" label={T('End', 'Colgar')} onClick={() => end()} hangup />
+            <div className="mt-8 w-full grid grid-cols-3 items-center">
+              <span />
+              <span className="justify-self-center">
+                <CallButton color="#FF3B30" onClick={() => end()} hangup />
+              </span>
+              {keypad && (
+                <button onClick={() => setKeypad(false)} className="justify-self-center bg-transparent border-0 text-white text-[17px] cursor-pointer">
+                  {T('Hide', 'Ocultar')}
+                </button>
+              )}
             </div>
           </div>
         )}
 
         {status === 'ended' && (
-          <div className="flex-1 flex flex-col items-center text-center px-6 pt-12 pb-10 gap-3">
-            <span className="text-[15px] text-[#B4A9BC]">
-              {T('Call ended', 'Llamada terminada')}
-              {clock ? ` · ${clock}` : ''}
+          <div className="absolute inset-0 top-12 flex flex-col items-center px-6 pb-14">
+            <span className="mt-16 text-[17px] text-white/70">
+              {T('Call ended', 'Llamada finalizada')} · {clock}
             </span>
-            <span className="font-display font-black text-[28px]">State Farm · Nora</span>
-            <p className="m-0 text-[17px] leading-snug text-[#D9D2DE] max-w-[290px]">
-              {claim?.number
-                ? T(`Your claim ${claim.number} is in. We’ll check in again at 8 AM.`, `Su reclamo ${claim.number} está enviado. Le llamamos a las 8 AM.`)
-                : T('Thanks for talking with us. We’ll check in again at 8 AM.', 'Gracias por hablar con nosotros. Le llamamos de nuevo a las 8 AM.')}
-            </p>
+            <span className="mt-1 text-[38px] font-normal leading-tight">State Farm</span>
+            <span className="text-[17px] text-white/70">{NORA_PHONE}</span>
             <div className="mt-auto">
-              <RoundButton color="#1F9D63" label={T('Call back', 'Devolver llamada')} onClick={() => store.setCallStatus(c.id, 'ringing')} />
+              <CallButton color="#34C759" label={T('Call back', 'Volver a llamar')} onClick={() => store.setCallStatus(c.id, 'ringing')} />
             </div>
           </div>
         )}
       </div>
 
-      {/* Demo stand-in for the policyholder's voice. On a real call they just talk. */}
-      {live && (
-        <div className="w-full lg:w-[360px] flex flex-col gap-2.5">
-          <span className="hn-label text-[11px] text-grey">
-            {T(`Demo · speak, or tap what ${first(c.name)} says`, `Demo · hable o toque lo que dice ${first(c.name)}`)}
+      {/* ---------- Live transcript ---------- */}
+      <section className="lg:h-[720px] min-h-[420px] rounded-2xl border border-line bg-white flex flex-col overflow-hidden">
+        <header className="px-5 py-4 border-b border-line flex items-center gap-3 flex-wrap">
+          <span className="font-semibold text-[20px]">{T('Call transcript', 'Transcripción de la llamada')}</span>
+          <span className="flex items-center gap-2 text-[15px] text-grey">
+            {live && <span className="w-2 h-2 rounded-full bg-sf-red" />}
+            {!live
+              ? ringing
+                ? T('Incoming call. Accept it on the phone.', 'Llamada entrante. Acéptela en el teléfono.')
+                : T('Not on a call', 'Sin llamada')
+              : takeover
+                ? T('With Jordan, a State Farm agent', 'Con Jordan, agente de State Farm')
+                : listening
+                  ? T('Listening…', 'Escuchando…')
+                  : speaking
+                    ? T('Nora is speaking', 'Nora está hablando')
+                    : T('Your turn to talk', 'Su turno')}
           </span>
-          <div className="flex flex-wrap gap-2">
-            {CHIPS[stage](c).map((p) => (
-              <button
-                key={p.en}
-                onClick={() => reply(es ? p.es : p.en)}
-                disabled={speaking && !takeover}
-                className="h-10 px-3.5 rounded-full border-2 border-charcoal bg-white font-bold text-sm cursor-pointer hover:bg-charcoal hover:text-white disabled:opacity-40"
-              >
-                {es ? p.es : p.en}
-              </button>
-            ))}
+        </header>
+
+        {req && live && (
+          <div className="px-5 py-2.5 bg-petal-50 border-b border-line text-[15px]">
+            {takeover || req.status === 'accepted'
+              ? T('Jordan has joined the call.', 'Jordan se unió a la llamada.')
+              : T('Connecting you to a person. You’re next in line.', 'Le estamos comunicando con una persona. Usted sigue.')}
           </div>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              reply(typed);
-              setTyped('');
-            }}
-          >
-            <input
-              value={typed}
-              onChange={(e) => setTyped(e.target.value)}
-              placeholder={T('Or type what you’d say…', 'O escriba lo que diría…')}
-              className="w-full h-12 px-4 rounded-full border-2 border-charcoal/20 text-[15px] outline-none"
-            />
-          </form>
+        )}
+
+        <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto px-5 py-4 flex flex-col gap-4" aria-live="polite">
+          {callLines.length === 0 && (
+            <p className="m-auto max-w-[360px] text-center text-[16px] text-grey leading-relaxed">
+              {T(
+                'Everything said on the call appears here, so a family member can follow along or you can read back what Nora said.',
+                'Todo lo que se dice en la llamada aparece aquí, para que un familiar pueda seguirla o usted pueda releer lo que dijo Nora.',
+              )}
+            </p>
+          )}
+          {callLines.map((l) => {
+            const me = l.kind === 'cust';
+            return (
+              <div key={l.id} className={`flex flex-col gap-1 max-w-[88%] hn-in ${me ? 'self-end items-end' : 'self-start'}`}>
+                <span className="text-[13px] text-grey">
+                  {l.kind === 'ai' ? T('Nora (AI assistant)', 'Nora (asistente de IA)') : l.kind === 'agent' ? T('Jordan, State Farm agent', 'Jordan, agente de State Farm') : T('You', 'Usted')} · {l.time}
+                </span>
+                <span className={`px-3.5 py-2.5 rounded-2xl text-[16px] leading-snug ${me ? 'bg-charcoal text-white' : 'bg-petal-50'}`}>{l.text}</span>
+              </div>
+            );
+          })}
         </div>
-      )}
+
+        <footer className="border-t border-line px-5 py-4 flex flex-col gap-3 bg-petal-25">
+          {live ? (
+            <>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[14px] text-grey mr-1">{T(`Demo · answer as ${first(c.name)}:`, `Demo · responda como ${first(c.name)}:`)}</span>
+                {CHIPS[stage](c).map((p) => (
+                  <button
+                    key={p.en}
+                    onClick={() => reply(es ? p.es : p.en)}
+                    disabled={speaking && !takeover}
+                    className="h-9 px-3.5 rounded-full border border-charcoal/30 bg-white text-[15px] cursor-pointer hover:border-charcoal disabled:opacity-40"
+                  >
+                    {es ? p.es : p.en}
+                  </button>
+                ))}
+              </div>
+              <form
+                className="flex gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  reply(typed);
+                  setTyped('');
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={toggleMic}
+                  className="h-11 px-4 rounded-full border-0 text-[15px] font-semibold cursor-pointer whitespace-nowrap"
+                  style={{ background: listening ? '#ED1D24' : '#1A1A1A', color: '#fff' }}
+                >
+                  {listening ? T('Listening…', 'Escuchando…') : T('Speak', 'Hablar')}
+                </button>
+                <input
+                  value={typed}
+                  onChange={(e) => setTyped(e.target.value)}
+                  placeholder={T('Or type what you’d say', 'O escriba lo que diría')}
+                  className="flex-1 min-w-0 h-11 px-4 rounded-full border border-line bg-white text-[15px] outline-none focus:border-charcoal/50"
+                />
+              </form>
+              <span className="text-[13px] text-grey">
+                {T('On the phone keypad: 1 for a person · 2 to repeat · 3 para español', 'En el teclado: 1 para una persona · 2 para repetir · 3 for English')}
+              </span>
+            </>
+          ) : (
+            <span className="text-[15px] text-grey">
+              {ringing
+                ? T('Tap Accept on the phone to answer. In real life this is just your phone ringing.', 'Toque Aceptar en el teléfono. En la vida real, es solo su teléfono sonando.')
+                : T('Tap Call back on the phone to start again.', 'Toque Volver a llamar para empezar de nuevo.')}
+            </span>
+          )}
+        </footer>
+      </section>
     </div>
   );
 }
 
-function PhoneIcon({ hangup = false }: { hangup?: boolean }) {
+function Glyph({ d }: { d: string }) {
   return (
-    <svg width="28" height="28" viewBox="0 0 24 24" fill="#fff" aria-hidden style={{ transform: hangup ? 'rotate(135deg)' : undefined }}>
-      <path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.6a1 1 0 0 1-.25 1z" />
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d={d} />
     </svg>
   );
 }
 
-function RoundButton({ color, label, onClick, hangup = false }: { color: string; label: string; onClick: () => void; hangup?: boolean }) {
+function CallButton({ color, label, onClick, hangup = false, pulse = false }: { color: string; label?: string; onClick: () => void; hangup?: boolean; pulse?: boolean }) {
   return (
-    <button onClick={onClick} className="flex flex-col items-center gap-2 bg-transparent border-0 text-white cursor-pointer">
-      <span className="w-[68px] h-[68px] rounded-full flex items-center justify-center" style={{ background: color }}>
-        <PhoneIcon hangup={hangup} />
+    <button onClick={onClick} aria-label={label || 'End call'} className="flex flex-col items-center gap-2 bg-transparent border-0 text-white cursor-pointer">
+      <span className="w-[74px] h-[74px] rounded-full flex items-center justify-center" style={{ background: color, animation: pulse ? 'hnRing 1.8s ease-out infinite' : undefined }}>
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="#fff" aria-hidden style={{ transform: hangup ? 'rotate(135deg)' : undefined }}>
+          <path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.6a1 1 0 0 1-.25 1z" />
+        </svg>
       </span>
-      <span className="text-[13px] font-semibold">{label}</span>
+      {label && <span className="text-[14px]">{label}</span>}
     </button>
   );
 }
 
-function ControlButton({ on, onClick, label, icon }: { on: boolean; onClick: () => void; label: string; icon: 'mic' | 'speaker' }) {
+function Control({ label, d, on = false, dim = false, dots = false, onClick }: { label: string; d?: string; on?: boolean; dim?: boolean; dots?: boolean; onClick?: () => void }) {
   return (
-    <button onClick={onClick} className="flex flex-col items-center gap-1.5 bg-transparent border-0 text-white cursor-pointer">
-      <span className="w-[60px] h-[60px] rounded-full flex items-center justify-center" style={{ background: on ? '#fff' : 'rgba(255,255,255,.14)' }}>
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={on ? '#1A1A1A' : '#fff'} strokeWidth="2" strokeLinecap="round" aria-hidden>
-          {icon === 'mic' ? (
-            <>
-              <rect x="9" y="3" width="6" height="11" rx="3" />
-              <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
-            </>
-          ) : (
-            <>
-              <path d="M4 10v4h4l5 4V6L8 10z" />
-              <path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12" />
-            </>
-          )}
-        </svg>
+    <button
+      onClick={onClick}
+      disabled={dim}
+      className="flex flex-col items-center gap-1.5 bg-transparent border-0 text-white cursor-pointer disabled:cursor-default"
+      style={{ opacity: dim ? 0.45 : 1 }}
+    >
+      <span className="w-[74px] h-[74px] rounded-full flex items-center justify-center" style={{ background: on ? '#fff' : 'rgba(255,255,255,.2)' }}>
+        {dots ? (
+          <span className="grid grid-cols-3 gap-[5px]">
+            {Array.from({ length: 9 }).map((_, i) => (
+              <i key={i} className="w-[6px] h-[6px] rounded-full" style={{ background: on ? '#000' : '#fff' }} />
+            ))}
+          </span>
+        ) : (
+          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke={on ? '#000' : '#fff'} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d={d} />
+          </svg>
+        )}
       </span>
-      <span className="text-[12px] font-semibold">{label}</span>
+      <span className="text-[13px]">{label}</span>
     </button>
   );
 }

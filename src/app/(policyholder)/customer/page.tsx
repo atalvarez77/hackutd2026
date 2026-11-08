@@ -31,7 +31,7 @@ export default function PortalPage() {
           </div>
           <div className="flex gap-3 flex-wrap">
             <div className="px-[18px] py-3.5 rounded-2xl bg-white flex flex-col gap-0.5 min-w-[150px]">
-              <span className="hn-label text-[10px] text-grey">{T('Storm risk', 'Riesgo por tormenta')}</span>
+              <span className="hn-label text-[10px] text-grey">{T('Risk', 'Riesgo')}</span>
               <span className="font-mono font-bold text-[30px]" style={{ color: TIER_LIGHT[c.urgency] }}>
                 {c.riskScore}
               </span>
@@ -44,17 +44,16 @@ export default function PortalPage() {
         </div>
       </section>
 
-      <div className="max-w-[1280px] w-full mx-auto px-[clamp(16px,3vw,40px)] pt-9 pb-16 grid gap-8 items-start grid-cols-1 lg:grid-cols-2">
-        {/* Left: the call. Sticky on desktop so it stays in view while the summary grows. */}
-        <div className="lg:sticky lg:top-[100px] flex flex-col items-center gap-3">
-          <WelfareCall key={c.id} />
-        </div>
+      <div className="max-w-[1280px] w-full mx-auto px-[clamp(16px,3vw,40px)] pt-9 pb-16 flex flex-col gap-8">
+        {/* The call: phone on the left, live transcript on the right. */}
+        <WelfareCall key={c.id} />
 
-        {/* Right: what happened on the call, plus the slower channels. */}
-        <div className="flex flex-col gap-6">
+        <div className="grid gap-8 items-start grid-cols-1 lg:grid-cols-2">
           <CallSummary />
 
-          <section id="contacts" className="rounded-3xl border-2 border-charcoal p-6 flex flex-col gap-3 scroll-mt-[110px]">
+          <div className="flex flex-col gap-6">
+
+          <section id="contacts" className="rounded-2xl border border-line p-6 flex flex-col gap-3 scroll-mt-[110px]">
             <span className="font-display font-black text-[24px] leading-none">{T('Emergency contact', 'Contacto de emergencia')}</span>
             <div className="flex items-center gap-3">
               <span className="w-10 h-10 rounded-full bg-petal flex items-center justify-center font-display font-black text-[15px]">{c.emergencyContact.name[0]}</span>
@@ -64,14 +63,14 @@ export default function PortalPage() {
                   {tx(c.emergencyContact.relationship, lang)} · <span className="font-mono">{c.emergencyContact.phone}</span>
                 </span>
               </div>
-              <button className="h-[38px] px-3.5 rounded-full border-2 border-charcoal/20 bg-white font-bold text-[13px] cursor-pointer">{T('Edit', 'Editar')}</button>
+              <button className="h-[38px] px-3.5 rounded-full border border-line bg-white font-bold text-[13px] cursor-pointer">{T('Edit', 'Editar')}</button>
             </div>
             <span className="text-[13px] text-grey">
               {T('Nora texts them if she finds a problem or can’t reach you.', 'Nora le avisa por mensaje si encuentra un problema o no logra comunicarse con usted.')}
             </span>
           </section>
 
-          <details className="group rounded-3xl border-2 border-charcoal/15 open:border-charcoal">
+          <details className="group rounded-2xl border border-line ">
             <summary className="list-none cursor-pointer px-6 py-5 flex items-center gap-3">
               <span className="flex-1 flex flex-col">
                 <span className="font-bold text-[17px]">{T('Can’t talk right now?', '¿No puede hablar ahora?')}</span>
@@ -83,6 +82,7 @@ export default function PortalPage() {
               <NoraChat />
             </div>
           </details>
+          </div>
         </div>
       </div>
     </>

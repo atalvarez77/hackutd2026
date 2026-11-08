@@ -49,7 +49,7 @@ function ClaimFlowView() {
           <Link href="/customer#call" onClick={() => store.setCallStatus(c.id, 'ringing')} className="h-[52px] px-6 rounded-full bg-sf-red text-white no-underline font-bold flex items-center">
             {T('Call Nora', 'Llamar a Nora')}
           </Link>
-          <button onClick={() => store.applyHazard(c.id)} className="h-[52px] px-6 rounded-full border-2 border-charcoal bg-white font-bold cursor-pointer">
+          <button onClick={() => store.applyHazard(c.id)} className="h-[52px] px-6 rounded-full border border-line bg-white font-bold cursor-pointer">
             {T('Start it here', 'Empezar aquí')}
           </button>
         </div>
@@ -109,8 +109,8 @@ function ClaimFlowView() {
       <div className="max-w-[1280px] w-full mx-auto px-[clamp(16px,3vw,40px)] pt-9 pb-20 grid gap-9 items-start grid-cols-1 lg:grid-cols-[minmax(240px,300px)_minmax(0,1fr)]">
         <ClaimStepper current={n} maxReachable={done ? 5 : Math.max(step, n)} lang={c.language} onSelect={done ? undefined : (i) => i <= 4 && setStep(i)} />
 
-        <section className="border-2 border-charcoal rounded-3xl overflow-hidden hn-in" key={n}>
-          <div className="px-[26px] py-[22px] border-b-2 border-charcoal flex items-center gap-3.5 flex-wrap">
+        <section className="border border-line rounded-2xl overflow-hidden hn-in" key={n}>
+          <div className="px-[26px] py-[22px] border-b border-line flex items-center gap-3.5 flex-wrap">
             <span className="font-mono text-[13px] text-sf-red">{T('STEP', 'PASO')} {n + 1} / 8</span>
             <span className="font-display font-black text-[32px] leading-none">{es ? CLAIM_STEPS[n].es : CLAIM_STEPS[n].en}</span>
             <span className="flex-1" />
@@ -246,10 +246,10 @@ function ClaimFlowView() {
             )}
           </div>
 
-          <div className="px-[26px] py-[18px] border-t-2 border-charcoal flex gap-3 items-center bg-petal-25 flex-wrap">
+          <div className="px-[26px] py-[18px] border-t border-line flex gap-3 items-center bg-petal-25 flex-wrap">
             <button
               onClick={() => !done && n > 0 && setStep(n - 1)}
-              className="h-[52px] px-5 rounded-full border-2 border-charcoal/20 bg-white font-bold text-[15px] cursor-pointer"
+              className="h-[52px] px-5 rounded-full border border-line bg-white font-bold text-[15px] cursor-pointer"
               style={{ opacity: !done && n > 0 ? 1 : 0.4 }}
             >
               {T('Back', 'Atrás')}

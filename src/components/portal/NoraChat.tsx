@@ -44,8 +44,8 @@ export function NoraChat() {
   const quick = es ? ['Se congeló la tubería', 'Estoy bien', 'Necesito una persona'] : ['My pipes froze', 'I’m okay', 'I need a person'];
 
   return (
-    <section className="border-2 border-charcoal rounded-3xl overflow-hidden flex flex-col min-h-[440px]">
-      <div className="px-[22px] py-[18px] border-b-2 border-charcoal flex items-center gap-3">
+    <section className="border border-line rounded-2xl overflow-hidden flex flex-col min-h-[440px]">
+      <div className="px-[22px] py-[18px] border-b border-line flex items-center gap-3">
         <span className="w-[52px] h-[52px] rounded-[14px] bg-charcoal flex items-center justify-center flex-none">
           <NoraWave speaking={pending} />
         </span>
@@ -59,7 +59,7 @@ export function NoraChat() {
         {lines.map((l) =>
           l.kind === 'claim' ? (
             claim && claim.status !== 'none' ? (
-              <Link key={l.id} href="/customer/claim" className="self-start w-[min(100%,360px)] rounded-2xl border-2 border-charcoal bg-white no-underline overflow-hidden hn-in">
+              <Link key={l.id} href="/customer/claim" className="self-start w-[min(100%,360px)] rounded-2xl border border-line bg-white no-underline overflow-hidden hn-in">
                 <div className="px-3.5 py-2.5 bg-sf-red text-white hn-label text-[13px]">{T('Claim pre-filed for you', 'Reclamo pre-llenado para usted')}</div>
                 <div className="p-3.5 flex flex-col gap-1.5">
                   <span className="font-display font-black text-xl">{tx(claim.type, c.language)}</span>
@@ -91,7 +91,7 @@ export function NoraChat() {
 
       <div className="px-[22px] pt-3 flex gap-2 flex-wrap">
         {quick.map((q) => (
-          <button key={q} onClick={() => send(q)} className="h-10 px-3.5 rounded-full border-2 border-charcoal bg-white font-bold text-sm cursor-pointer hover:bg-charcoal hover:text-white">
+          <button key={q} onClick={() => send(q)} className="h-10 px-3.5 rounded-full border border-line bg-white font-bold text-sm cursor-pointer hover:bg-charcoal hover:text-white">
             {q}
           </button>
         ))}
@@ -107,7 +107,7 @@ export function NoraChat() {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder={T('Tell us how you’re doing…', 'Cuéntenos cómo está…')}
-          className="flex-1 min-w-0 h-[52px] px-[18px] rounded-full border-2 border-charcoal/20 text-base outline-none"
+          className="flex-1 min-w-0 h-[52px] px-[18px] rounded-full border border-line text-base outline-none"
         />
         <button type="submit" className="h-[52px] px-[22px] rounded-full bg-sf-red text-white font-bold text-base cursor-pointer">
           {T('Send', 'Enviar')}

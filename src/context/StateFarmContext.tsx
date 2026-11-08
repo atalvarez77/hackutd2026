@@ -18,7 +18,7 @@ import { claimStatusFromDb, connectSpacetime, custIdOf, tierFromScore, type DbSt
 
 const CLAIM_RANK: Record<ClaimFlow['status'], number> = { none: 0, draft: 1, submitted: 2, approved: 3 };
 
-const KEY = 'sf_v9';
+const KEY = 'sf_v10';
 const CHANNEL = 'hn_demo';
 
 export interface AppState {
@@ -32,7 +32,92 @@ export interface AppState {
   priorityOverride: Record<string, UrgencyLevel | null>;
   callStatus: Record<string, CallStatus>;
   reqSeq: number;
+  /** Catastrophe mode: declared by an agent, Nora dials everyone in the zone. */
+  catMode: { on: boolean; name: string; at?: number };
+  /** Bumped by Reset so other tabs drop their old state instead of merging it back in. */
+  epoch: number;
+  /** Last-write time per slot (e.g. "cs:cust-1"), so tabs can merge instead of overwriting. */
+  stamps: Record<string, number>;
 }
+
+const REQ_RANK = { waiting: 0, accepted: 1, closed: 2 } as const;
+
+/**
+ * Tabs broadcast whole snapshots. Taking the newest snapshot wholesale loses writes when two
+ * tabs act at once (the agent tab's background calls vs. the portal's live call), so merge:
+ * transcripts and requests are unioned, claims never move backwards, and keyed slots keep
+ * whichever side wrote last.
+ */
+function mergeState(local: AppState, remote: AppState): AppState {
+  if ((remote.epoch || 0) !== (local.epoch || 0)) return (remote.epoch || 0) > (local.epoch || 0) ? remote : local;
+  const ls = local.stamps || {};
+  const rs = remote.stamps || {};
+  const newer = (k: string) => (rs[k] || 0) >= (ls[k] || 0);
+  const ids = remote.customers.map((c) => c.id);
+
+  const transcripts: Record<string, Line[]> = { ...local.transcripts, ...remote.transcripts };
+  for (const id of Object.keys(transcripts)) {
+    const r = remote.transcripts[id] || [];
+    const seen = new Set(r.map((l) => l.id));
+    transcripts[id] = [...r, ...(local.transcripts[id] || []).filter((l) => !seen.has(l.id))];
+  }
+
+  const reqs = new Map<string, ContactRequest>();
+  for (const q of [...local.contactRequests, ...remote.contactRequests]) {
+    const prev = reqs.get(q.id);
+    if (!prev || REQ_RANK[q.status] >= REQ_RANK[prev.status]) reqs.set(q.id, q);
+  }
+
+  const claims: Record<string, ClaimFlow> = { ...local.claims };
+  for (const [id, rc] of Object.entries(remote.claims)) {
+    const lc = local.claims[id];
+    if (!lc) claims[id] = rc;
+    else {
+      const top = CLAIM_RANK[rc.status] >= CLAIM_RANK[lc.status] ? rc : lc;
+      claims[id] = { ...top, number: top.number || rc.number || lc.number, confirmed: { ...lc.confirmed, ...rc.confirmed } };
+    }
+  }
+
+  const pick = <T,>(k: string, l: T, r: T) => (newer(k) ? r : l);
+  const callStatus = { ...local.callStatus };
+  const priorityOverride = { ...local.priorityOverride };
+  const toolRuns = { ...local.toolRuns };
+  for (const id of ids) {
+    callStatus[id] = pick('cs:' + id, local.callStatus[id], remote.callStatus[id]);
+    priorityOverride[id] = pick('po:' + id, local.priorityOverride[id], remote.priorityOverride[id]);
+    toolRuns[id] = pick('to:' + id, local.toolRuns[id], remote.toolRuns[id]);
+  }
+  const customers = remote.customers.map((rc) => {
+    const lc = local.customers.find((c) => c.id === rc.id);
+    return lc && !newer('cu:' + rc.id) ? lc : rc;
+  });
+  const stamps = { ...ls };
+  for (const [k, v] of Object.entries(rs)) stamps[k] = Math.max(v, stamps[k] || 0);
+
+  return {
+    ...remote,
+    customers,
+    activeCustomerId: pick('active', local.activeCustomerId, remote.activeCustomerId),
+    catMode: pick('cat', local.catMode, remote.catMode),
+    claims,
+    contactRequests: [...reqs.values()],
+    agentTakeover: { ...local.agentTakeover, ...remote.agentTakeover },
+    transcripts,
+    toolRuns,
+    priorityOverride,
+    callStatus,
+    reqSeq: Math.max(local.reqSeq, remote.reqSeq),
+    stamps,
+  };
+}
+
+/** Mark slots as written now. */
+const touch = (s: AppState, ...keys: string[]): AppState => {
+  const t = Date.now();
+  const stamps = { ...(s.stamps || {}) };
+  keys.forEach((k) => (stamps[k] = t));
+  return { ...s, stamps };
+};
 
 /** English translations for the seeded Spanish chat (shown under Spanish lines in the agent console). */
 const SEED_TR: Record<string, string> = {
@@ -77,6 +162,9 @@ function initialState(): AppState {
     priorityOverride: {},
     callStatus: { 'cust-1': 'ringing', 'cust-6': 'ai', 'cust-2': 'ai' },
     reqSeq: 0,
+    catMode: { on: false, name: 'Winter Storm Heather' },
+    epoch: 0,
+    stamps: {},
   };
 }
 
@@ -110,6 +198,7 @@ interface Ctx extends AppState {
   setPriorityOverride: (custId: string, tier: UrgencyLevel | null) => void;
   setCallStatus: (custId: string, s: CallStatus) => void;
   patchCustomer: (custId: string, p: Partial<CustomerProfile>) => void;
+  setCatMode: (on: boolean) => void;
   resetToDefaults: () => void;
 }
 
@@ -129,6 +218,7 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const bc = useRef<BroadcastChannel | null>(null);
   const [dbStatus, setDbStatus] = useState<DbStatus>('connecting');
   const stdb = useRef<SpacetimeBridge | null>(null);
+  const catTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   // SpacetimeDB: rows from the module are merged into AppState; writes go through reducers below.
   useEffect(() => {
@@ -206,7 +296,7 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       const saved = localStorage.getItem(KEY);
       if (saved) {
         const parsed = JSON.parse(saved) as AppState;
-        if (parsed?.customers?.length && parsed.claims) {
+        if (parsed?.customers?.length && parsed.claims && parsed.stamps) {
           remote.current = true;
           // eslint-disable-next-line react-hooks/set-state-in-effect
           setState(parsed);
@@ -215,9 +305,16 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     } catch {}
     setHydrated(true);
 
-    const apply = (s: AppState) => {
+    const apply = (incoming: AppState) => {
+      if (!incoming?.customers?.length) return;
       remote.current = true;
-      setState(s);
+      setState((s) => {
+        const merged = mergeState(s, incoming);
+        try {
+          localStorage.setItem(KEY, JSON.stringify(merged));
+        } catch {}
+        return merged;
+      });
       setLastSync(Date.now());
     };
     try {
@@ -255,7 +352,7 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const cust = (id: string) => stateRef.current.customers.find((c) => c.id === id)!;
 
   const patchCustomer: Ctx['patchCustomer'] = (custId, p) =>
-    update((s) => ({ ...s, customers: s.customers.map((c) => (c.id === custId ? { ...c, ...p } : c)) }));
+    update((s) => touch({ ...s, customers: s.customers.map((c) => (c.id === custId ? { ...c, ...p } : c)) }, 'cu:' + custId));
 
   const appendLine: Ctx['appendLine'] = (custId, line) => {
     // Spoken/typed lines go to the module's live transcript (Nemotron/backends read it there).
@@ -280,15 +377,20 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       existing && existing.status !== 'none'
         ? existing
         : { id: 'DRF-99', status: 'draft', type: h.type, amount: h.amount, description: `Reported by policyholder: ${reported || h.hazard}`, confirmed: {} };
-    update((s) => ({
-      ...s,
-      claims: { ...s.claims, [custId]: claim },
-      customers: s.customers.map((x) =>
-        x.id === custId
-          ? { ...x, riskScore: Math.min(98, x.riskScore + 10), urgency: 'High', detectedHazard: h.hazard, checkInStatus: 'urgent_attention' }
-          : x,
+    update((s) =>
+      touch(
+        {
+          ...s,
+          claims: { ...s.claims, [custId]: claim },
+          customers: s.customers.map((x) =>
+            x.id === custId
+              ? { ...x, riskScore: Math.min(98, x.riskScore + 10), urgency: 'High', detectedHazard: h.hazard, checkInStatus: 'urgent_attention' }
+              : x,
+          ),
+        },
+        'cu:' + custId,
       ),
-    }));
+    );
     const score = Math.min(98, c.riskScore + 10);
     stdb.current?.pushTriage(custId, score, h.type, `Reported by policyholder: ${reported || h.hazard}`, h.hazard);
     if (claim !== existing) stdb.current?.pushClaim(custId, claim, false);
@@ -296,12 +398,11 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   };
 
   const runTools: Ctx['runTools'] = (custId, steps) => {
-    update((s) => ({ ...s, toolRuns: { ...s.toolRuns, [custId]: steps.map((t) => ({ name: t.name, output: t.output, status: 'queued' })) } }));
+    update((s) => touch({ ...s, toolRuns: { ...s.toolRuns, [custId]: steps.map((t) => ({ name: t.name, output: t.output, status: 'queued' })) } }, 'to:' + custId));
     const setStatus = (i: number, status: ToolCall['status']) =>
-      update((s) => ({
-        ...s,
-        toolRuns: { ...s.toolRuns, [custId]: (s.toolRuns[custId] || []).map((t, j) => (j === i ? { ...t, status } : t)) },
-      }));
+      update((s) =>
+        touch({ ...s, toolRuns: { ...s.toolRuns, [custId]: (s.toolRuns[custId] || []).map((t, j) => (j === i ? { ...t, status } : t)) } }, 'to:' + custId),
+      );
     steps.forEach((t, i) => {
       setTimeout(() => {
         if (stateRef.current.agentTakeover[custId]) return;
@@ -410,6 +511,7 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       claims: { ...s.claims, [custId]: { ...s.claims[custId], status: 'approved', number: num, approvedAt: nowTime() } },
       customers: s.customers.map((x) => (x.id === custId ? { ...x, checkInStatus: 'completed' } : x)),
     }));
+    update((s) => touch(s, 'cu:' + custId));
     // agent_approve_claim only fires when customer_approved is set, so make sure it is first
     // (the agent can approve a draft the policyholder confirmed verbally on the call).
     stdb.current?.pushClaim(custId, cl, true);
@@ -449,12 +551,18 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       cl && cl.status !== 'none' ? `Claim ${cl.number || cl.id} (${cl.status}) · $${cl.amount.toLocaleString()} · ${cl.type}.` : 'No claim drafted.',
       `Next: confirm safety, then ${cl?.status === 'draft' || cl?.status === 'submitted' ? 'approve the claim and dispatch' : 'decide whether to open a claim'}.`,
     ];
-    update((s) => ({
-      ...s,
-      agentTakeover: { ...s.agentTakeover, [custId]: true },
-      callStatus: { ...s.callStatus, [custId]: 'agent' },
-      toolRuns: { ...s.toolRuns, [custId]: (s.toolRuns[custId] || []).map((t) => (t.status === 'done' ? t : { ...t, status: 'paused' })) },
-    }));
+    update((s) =>
+      touch(
+        {
+          ...s,
+          agentTakeover: { ...s.agentTakeover, [custId]: true },
+          callStatus: { ...s.callStatus, [custId]: 'agent' },
+          toolRuns: { ...s.toolRuns, [custId]: (s.toolRuns[custId] || []).map((t) => (t.status === 'done' ? t : { ...t, status: 'paused' })) },
+        },
+        'cs:' + custId,
+        'to:' + custId,
+      ),
+    );
     appendLine(custId, { kind: 'handoff', text: '', items });
     appendLine(custId, { kind: 'event', text: 'Jordan M. joined · Nora paused', dot: 'blue' });
   };
@@ -483,8 +591,57 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   };
 
   const setPriorityOverride: Ctx['setPriorityOverride'] = (custId, tier) => {
-    update((s) => ({ ...s, priorityOverride: { ...s.priorityOverride, [custId]: tier } }));
+    update((s) => touch({ ...s, priorityOverride: { ...s.priorityOverride, [custId]: tier } }, 'po:' + custId));
     appendLine(custId, { kind: 'event', text: tier ? `Priority set to ${tier} by Jordan M.` : 'Priority returned to AI ranking', dot: 'lavender' });
+  };
+
+  const setCallStatus: Ctx['setCallStatus'] = (custId, cs) => update((s) => touch({ ...s, callStatus: { ...s.callStatus, [custId]: cs } }, 'cs:' + custId));
+
+  /**
+   * Catastrophe mode: Nora dials every policyholder in the zone, highest risk first. Background
+   * customers get a short scripted call in this tab; the active policyholder's phone rings in the portal.
+   */
+  const setCatMode: Ctx['setCatMode'] = (on) => {
+    catTimers.current.forEach(clearTimeout);
+    catTimers.current = [];
+    const s0 = stateRef.current;
+    update((s) => touch({ ...s, catMode: { ...s.catMode, on, at: on ? Date.now() : undefined } }, 'cat'));
+    if (!on) {
+      s0.customers.forEach((c) => appendLine(c.id, { kind: 'event', text: 'Catastrophe mode ended by Jordan M.', dot: 'lavender' }));
+      return;
+    }
+    const order = [...s0.customers].sort((a, b) => b.riskScore - a.riskScore);
+    order.forEach((c, i) => {
+      appendLine(c.id, { kind: 'event', text: `${s0.catMode.name} declared · Nora calling (priority ${i + 1} of ${order.length})`, dot: 'red' });
+      patchCustomer(c.id, { riskScore: Math.min(98, c.riskScore + 6) });
+      const cs = s0.callStatus[c.id];
+      if (cs === 'ai' || cs === 'agent') return;
+      setCallStatus(c.id, 'ringing');
+      if (c.id === s0.activeCustomerId) return; // the portal answers this one
+      const es = c.language === 'es';
+      const damaged = !!c.detectedHazard && c.detectedHazard !== 'None';
+      const t0 = 2500 + i * 2200;
+      const at = (ms: number, fn: () => void) => catTimers.current.push(setTimeout(fn, t0 + ms));
+      const hi = { en: `Hi ${first(c.name)}, this is Nora from State Farm about the storm. Are you and the house okay?`, es: `Hola ${first(c.name)}, le habla Nora de State Farm por la tormenta. ¿Están bien usted y su casa?` };
+      const ans = damaged
+        ? { en: 'We’re safe, but there’s some damage to the house.', es: 'Estamos bien, pero hay daños en la casa.' }
+        : { en: 'All good here, thanks for calling.', es: 'Todo bien, gracias por llamar.' };
+      const close = damaged
+        ? { en: 'Understood. I’m flagging this so an agent can help with the claim.', es: 'Entiendo. Un agente le llamará en breve para el reclamo.' }
+        : { en: 'Glad to hear it. I’ll check in again in the morning.', es: 'Qué bueno. Le llamo de nuevo en la mañana.' };
+      const line = (kind: 'ai' | 'cust', p: { en: string; es: string }) =>
+        appendLine(c.id, { kind, channel: 'call', text: es ? p.es : p.en, tr: es ? p.en : undefined });
+      at(0, () => {
+        setCallStatus(c.id, 'ai');
+        line('ai', hi);
+      });
+      at(3000, () => line('cust', ans));
+      at(5500, () => {
+        line('ai', close);
+        patchCustomer(c.id, { checkInStatus: damaged ? 'urgent_attention' : 'completed' });
+        setCallStatus(c.id, 'ended');
+      });
+    });
   };
 
   const value: Ctx = {
@@ -493,7 +650,7 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     lastSync,
     dbStatus,
     activeCustomer: state.customers.find((c) => c.id === state.activeCustomerId) || state.customers[0],
-    setActiveCustomerId: (id) => update((s) => ({ ...s, activeCustomerId: id })),
+    setActiveCustomerId: (id) => update((s) => touch({ ...s, activeCustomerId: id }, 'active')),
     updateCustomerLanguage: (id, lang) => patchCustomer(id, { language: lang }),
     appendLine,
     applyHazard,
@@ -509,13 +666,16 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     stepIn,
     sendAgentMessage,
     setPriorityOverride,
-    setCallStatus: (custId, cs) => update((s) => ({ ...s, callStatus: { ...s.callStatus, [custId]: cs } })),
+    setCallStatus,
     patchCustomer,
+    setCatMode,
     resetToDefaults: () => {
+      catTimers.current.forEach(clearTimeout);
+      catTimers.current = [];
       try {
         localStorage.removeItem(KEY);
       } catch {}
-      setState(initialState());
+      setState({ ...initialState(), epoch: Date.now() });
     },
   };
 

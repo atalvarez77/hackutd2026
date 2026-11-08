@@ -3,9 +3,11 @@
 @theme {
   --color-sf-red: #ED1D24;
   --color-charcoal: #1A1A1A;
-  --color-petal: #EFD9CE;
-  --color-petal-50: #F6E9E2;
-  --color-petal-25: #FBF6F3;
+  /* Soft warm blush, lighter than the original petal so pages stay mostly white. */
+  --color-petal: #F3E6DE;
+  --color-petal-50: #F8EFEA;
+  --color-petal-25: #FCF8F5;
+  --color-line: #DEDBD6;
   --color-lavender: #7D6F86;
   --color-grey: #474954;
   --color-blue: #286784;
@@ -21,28 +23,38 @@
 }
 
 @theme inline {
-  --font-display: var(--font-kanit), sans-serif;
-  --font-sans: var(--font-jakarta), sans-serif;
-  --font-mono: var(--font-space-mono), monospace;
+  --font-display: var(--font-sans-base), system-ui, sans-serif;
+  --font-sans: var(--font-sans-base), system-ui, sans-serif;
+  /* No monospace: numbers use tabular figures in the same family. */
+  --font-mono: var(--font-sans-base), system-ui, sans-serif;
 }
 
 body {
   background: #ffffff;
   color: #1a1a1a;
-  font-family: var(--font-jakarta), sans-serif;
+  font-family: var(--font-sans-base), system-ui, sans-serif;
+  font-size: 17px;
 }
+
+.font-mono { font-variant-numeric: tabular-nums; letter-spacing: 0; }
+.font-display { letter-spacing: -0.015em; }
+.font-black { font-weight: 700; }
 
 a {
   color: inherit;
 }
 
-/* Small uppercase eyebrow labels (Jakarta 800, tracked) */
+/* Small section labels: plain sentence case, no tracking. */
 .hn-label {
-  font-family: var(--font-jakarta), sans-serif;
-  font-weight: 800;
-  font-size: 12px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: 0;
+}
+
+/* iOS-style call screen uses the system font where available. */
+.ios {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', var(--font-sans-base), sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
 /* Horizontal-scroll tab rows on small screens */
@@ -89,16 +101,18 @@ a {
 .hn-map .leaflet-tile-pane {
   filter: invert(1) hue-rotate(180deg) brightness(0.85) contrast(0.9) saturate(0.3);
 }
-.hn-map .leaflet-container { background: #0e0e10; font-family: var(--font-jakarta), sans-serif; }
+.hn-map .leaflet-container { background: #0e0e10; font-family: var(--font-sans-base), sans-serif; }
 .hn-map .leaflet-control-attribution { background: rgba(14, 14, 16, 0.8) !important; color: #b9a6c9 !important; }
 .hn-map .leaflet-control-attribution a { color: #ff6b73 !important; }
 .hn-pin-label {
   background: #141417 !important;
   color: #fff !important;
-  border: 1px solid #ff3b47 !important;
-  border-radius: 8px !important;
-  font-weight: 700;
-  font-size: 12px;
-  box-shadow: 0 0 12px rgba(255, 59, 71, 0.4) !important;
+  border: 1px solid rgba(255, 255, 255, 0.16) !important;
+  border-radius: 6px !important;
+  font-weight: 600;
+  font-size: 13px;
+  box-shadow: none !important;
+  cursor: pointer;
 }
+.hn-pin-label.is-sel { background: #f4f1f6 !important; color: #141417 !important; }
 .hn-pin-label::before { display: none; }

@@ -1,25 +1,13 @@
 import type { Metadata } from 'next';
-import { Kanit, Plus_Jakarta_Sans, Space_Mono } from 'next/font/google';
+import { Source_Sans_3 } from 'next/font/google';
 import './globals.css';
 import { StateFarmProvider } from '@/context/StateFarmContext';
 
-const kanit = Kanit({
-  variable: '--font-kanit',
-  subsets: ['latin'],
-  weight: ['700', '900'],
-  style: ['normal', 'italic'],
-});
-
-const jakarta = Plus_Jakarta_Sans({
-  variable: '--font-jakarta',
+// One plain, readable family for everything (closer to State Farm's own site than a display face).
+const sans = Source_Sans_3({
+  variable: '--font-sans-base',
   subsets: ['latin'],
   style: ['normal', 'italic'],
-});
-
-const spaceMono = Space_Mono({
-  variable: '--font-space-mono',
-  subsets: ['latin'],
-  weight: ['400', '700'],
 });
 
 export const metadata: Metadata = {
@@ -29,7 +17,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={`${kanit.variable} ${jakarta.variable} ${spaceMono.variable} h-full antialiased`}>
+    <html lang="en" className={`${sans.variable} h-full antialiased`}>
       <body className="min-h-full flex flex-col">
         <StateFarmProvider>{children}</StateFarmProvider>
       </body>

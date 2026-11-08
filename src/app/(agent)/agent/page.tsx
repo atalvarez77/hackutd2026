@@ -8,14 +8,15 @@ import { ToolTrace } from '@/components/ui/ToolTrace';
 import { RiskFactor } from '@/components/ui/RiskFactor';
 import { StreamText } from '@/components/ui/StreamText';
 import { ClaimChip } from '@/components/ui/Chips';
+import type { Line } from '@/types/statefarm';
 import { SIM, simTrace } from '@/components/agent/simScripts';
 import { first, initials, money, TIER_DARK, TIER_RANK, WATER_BACKUP } from '@/lib/hn';
 import type { CustomerProfile, UrgencyLevel } from '@/types/statefarm';
 
 const TriageMap = dynamic(() => import('@/components/agent/TriageMap'), { ssr: false });
 
-const ROW_H = 68;
-const GRID = '28px 84px 64px minmax(0,1.6fr) minmax(0,1fr) 160px 96px';
+const ROW_H = 72;
+const GRID = 'minmax(0,1.3fr) 110px minmax(0,1.4fr) 170px';
 // Events in the transcript: one accent for things that need attention, neutral otherwise.
 const DOT = { red: '#FF6B73', lavender: '#6E6878', blue: '#8FC3DD' } as const;
 
@@ -32,6 +33,7 @@ export default function AgentConsolePage() {
   const [panelOpen, setPanelOpen] = useState(false);
   const [msg, setMsg] = useState('');
   const [toast, setToast] = useState<string | null>(null);
+  const [catAsk, setCatAsk] = useState(false);
   const storeRef = useRef(store);
   storeRef.current = store;
 
@@ -126,6 +128,14 @@ export default function AgentConsolePage() {
     return ['Not reached', '#6E6878', false];
   };
 
+  const claimText = (id: string) => {
+    const cl = claims[id];
+    if (!cl || cl.status === 'none') return null;
+    if (cl.status === 'approved') return 'Claim approved';
+    if (cl.status === 'submitted') return 'Claim submitted · needs your approval';
+    return 'Claim draft';
+  };
+
   const waitingReqs = contactRequests.filter((r) => r.status !== 'closed');
   const counts = {
     All: customers.length,
@@ -150,6 +160,8 @@ export default function AgentConsolePage() {
           setFilter(v === 'drafts' ? 'Drafts' : 'All');
         }}
         draftCount={counts.Drafts}
+        catOn={store.catMode.on}
+        onCat={() => (store.catMode.on ? store.setCatMode(false) : setCatAsk(true))}
         lastSync={store.lastSync}
         dbStatus={store.dbStatus}
         customers={customers}
@@ -163,6 +175,20 @@ export default function AgentConsolePage() {
           showToast('Demo data restored');
         }}
       />
+
+      {store.catMode.on && (
+        <div className="flex-none flex items-center gap-3 px-6 py-2.5 bg-[#2A1416] border-b border-white/[.08] text-[15px]">
+          <Dot color="#FF6B73" />
+          <span className="font-semibold">Catastrophe mode · {store.catMode.name}</span>
+          <span className="text-mist">
+            Nora is calling everyone in the zone, highest risk first · {Object.values(callStatus).filter((v) => v === 'ai').length} on calls now
+          </span>
+          <span className="flex-1" />
+          <button onClick={() => store.setCatMode(false)} className="h-8 px-3 rounded-md border border-white/[.16] bg-transparent text-ink text-[14px] cursor-pointer">
+            End
+          </button>
+        </div>
+      )}
 
       {/* Request strip */}
       {waitingReqs.length > 0 && (
@@ -208,7 +234,11 @@ export default function AgentConsolePage() {
             <TriageMap
               customers={customers}
               tierOf={tier}
-              onSelect={(id) => {
+              selectedId={c.id}
+              catOn={store.catMode.on}
+              callLabel={(x) => callText(x)[0]}
+              onSelect={(id) => setSel(id)}
+              onOpen={(id) => {
                 setSel(id);
                 setView('queue');
               }}
@@ -226,7 +256,7 @@ export default function AgentConsolePage() {
                     <button
                       key={k}
                       onClick={() => setFilter(k)}
-                      className="h-[34px] px-2.5 rounded-md font-medium text-base cursor-pointer flex items-center gap-1.5"
+                      className="h-[32px] px-2.5 rounded-md text-[15px] cursor-pointer flex items-center gap-1.5"
                       style={{ background: filter === k ? '#2A2A30' : 'transparent', color: filter === k ? '#F4F1F6' : '#B9A6C9' }}
                     >
                       {k}
@@ -235,14 +265,11 @@ export default function AgentConsolePage() {
                   ))}
                 </div>
               </div>
-              <div className="grid gap-2.5 pl-[19px] pr-4 pb-2 hn-label text-[13px] text-mist border-b border-white/[.08]" style={{ gridTemplateColumns: GRID }}>
-                <div>#</div>
-                <div>Urgency</div>
-                <div>Risk</div>
+              <div className="grid gap-4 pl-[23px] pr-5 pb-2 text-[13px] text-[#8A8494] border-b border-white/[.08]" style={{ gridTemplateColumns: GRID }}>
                 <div>Policyholder</div>
-                <div>Hazard</div>
+                <div>Priority</div>
+                <div>Situation</div>
                 <div>Call</div>
-                <div>Claim</div>
               </div>
               <div className="flex-1 overflow-auto">
                 <div className="relative" style={{ height: vis.length * ROW_H }}>
@@ -255,7 +282,7 @@ export default function AgentConsolePage() {
                       <div
                         key={x.id}
                         onClick={() => setSel(x.id)}
-                        className="absolute left-0 right-0 grid gap-2.5 items-center px-4 cursor-pointer border-b border-white/[.08]"
+                        className="absolute left-0 right-0 grid gap-4 items-center pl-5 pr-5 cursor-pointer border-b border-white/[.06] hover:bg-white/[.03]"
                         style={{
                           top: Math.max(r, 0) * ROW_H,
                           height: ROW_H,
@@ -267,29 +294,31 @@ export default function AgentConsolePage() {
                           transition: 'top .6s ease, opacity .3s',
                         }}
                       >
-                        <div className="font-mono text-sm text-[#6E6878]">{sorted.indexOf(x) + 1}</div>
-                        <div className="flex items-center gap-1">
-                          <span className="px-2 py-[2px] rounded-md font-semibold text-[13px]" style={{ background: TIER_DARK[t].bg, color: TIER_DARK[t].fg }}>
-                            {t}
-                          </span>
-                          {priorityOverride[x.id] && <span title="Set manually" className="text-[11px] text-mist">manual</span>}
-                        </div>
-                        <div className="font-mono text-[17px]" style={{ color: t === 'High' ? '#F4F1F6' : '#9A93A3' }}>
-                          {x.riskScore}
-                        </div>
                         <div className="min-w-0 flex flex-col gap-0.5">
                           <div className="font-semibold text-[16px] truncate">{x.name}</div>
-                          <div className="text-[13px] text-mist truncate">
-                            {x.age} · {x.livesAlone ? 'Lives alone' : 'With family'} · {x.language === 'es' ? 'Spanish' : 'English'}
+                          <div className="text-[13px] text-[#8A8494] truncate">
+                            {x.age} · {x.livesAlone ? 'lives alone' : 'with family'}
+                            {x.language === 'es' ? ' · Spanish' : ''}
                           </div>
                         </div>
-                        <div className="min-w-0 text-[14px] text-[#D9D2DE] truncate">{x.detectedHazard}</div>
+                        <div className="flex items-baseline gap-2">
+                          <span className="font-semibold text-[15px]" style={{ color: TIER_DARK[t].fg }}>
+                            {t}
+                          </span>
+                          <span className="font-mono text-[14px] text-[#8A8494]">{x.riskScore}</span>
+                          {priorityOverride[x.id] && <span title="Set manually" className="text-[11px] text-[#8A8494]">· set</span>}
+                        </div>
+                        <div className="min-w-0 flex flex-col gap-0.5">
+                          <div className="text-[15px] text-[#D9D2DE] truncate">{x.detectedHazard}</div>
+                          {claimText(x.id) && (
+                            <div className="text-[13px] truncate" style={{ color: claims[x.id]?.status === 'submitted' ? '#F4F1F6' : '#8A8494' }}>
+                              {claimText(x.id)}
+                            </div>
+                          )}
+                        </div>
                         <div className="flex items-center gap-2 text-[14px] whitespace-nowrap overflow-hidden" style={{ color: stc }}>
                           {pulse && <Dot color={stc === '#FF6B73' ? stc : '#8FC3DD'} />}
                           {st}
-                        </div>
-                        <div>
-                          <ClaimChip dark claim={claims[x.id]} />
                         </div>
                       </div>
                     );
@@ -335,8 +364,17 @@ export default function AgentConsolePage() {
           </div>
 
           <div ref={scrollRef} className="flex-1 overflow-y-auto overflow-x-hidden px-[18px] py-4 flex flex-col gap-3">
-            {lines.map((l) => {
+            {lines.map((l, i) => {
               const animate = !seen.current[c.id].has(l.id);
+              const speech = (x: Line) => x.kind === 'ai' || x.kind === 'cust' || x.kind === 'agent';
+              const prevSpeech = speech(l) ? lines.slice(0, i).reverse().find(speech) : undefined;
+              const divider =
+                speech(l) && (!prevSpeech || (prevSpeech.channel || 'chat') !== (l.channel || 'chat')) ? (
+                  <div key={l.id + '-d'} className="flex items-center gap-2 pt-1 text-[12px] text-[#8A8494]">
+                    <span>{(l.channel || 'chat') === 'call' ? 'Phone call' : 'Text messages'}</span>
+                    <span className="flex-1 h-px bg-white/[.08]" />
+                  </div>
+                ) : null;
               if (l.kind === 'event')
                 return (
                   <div key={l.id} className="flex items-center gap-2 font-mono text-[13px] text-mist hn-in">
@@ -385,7 +423,8 @@ export default function AgentConsolePage() {
                   </div>
                 );
               const right = l.kind !== 'cust';
-              return (
+              return [
+                divider,
                 <div key={l.id} className="flex flex-col gap-1 hn-in" style={{ alignItems: right ? 'flex-end' : 'flex-start' }}>
                   <div className="text-[12px] text-mist">
                     {l.kind === 'ai' ? 'Nora (AI)' : l.kind === 'agent' ? 'You' : first(c.name)} · {l.time}
@@ -397,8 +436,8 @@ export default function AgentConsolePage() {
                     <StreamText text={l.text} animate={animate} />
                   </div>
                   {l.tr && <div className="max-w-[86%] text-[14px] italic text-mist leading-snug" style={{ textAlign: right ? 'right' : 'left' }}>{l.tr}</div>}
-                </div>
-              );
+                </div>,
+              ];
             })}
           </div>
 
@@ -561,6 +600,33 @@ export default function AgentConsolePage() {
           </aside>
         )}
       </div>
+
+      {catAsk && (
+        <div className="fixed inset-0 z-40 bg-black/60 flex items-center justify-center p-4" onClick={() => setCatAsk(false)}>
+          <div className="w-full max-w-[460px] rounded-xl bg-panel border border-white/[.1] p-6 flex flex-col gap-4" onClick={(e) => e.stopPropagation()}>
+            <div className="text-[20px] font-semibold">Declare a catastrophe event?</div>
+            <p className="m-0 text-[15px] text-mist leading-relaxed">
+              Nora will start calling every policyholder in the {store.catMode.name} zone right away, highest risk first. Anyone who reports damage or presses 1 for a
+              person comes to this queue. The policyholder portal shows a storm notice.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setCatAsk(false)} className="h-10 px-4 rounded-lg border border-white/[.14] bg-transparent text-ink cursor-pointer">
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  setCatAsk(false);
+                  store.setCatMode(true);
+                  showToast('Catastrophe mode on · Nora is dialing');
+                }}
+                className="h-10 px-4 rounded-lg bg-sf-red text-white font-semibold cursor-pointer"
+              >
+                Activate
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {toast && (
         <div className="fixed left-1/2 bottom-6 -translate-x-1/2 z-30 px-4 py-2.5 rounded-[10px] bg-ink text-panel font-medium shadow-[0_10px_30px_rgba(0,0,0,.2)] hn-in">{toast}</div>
