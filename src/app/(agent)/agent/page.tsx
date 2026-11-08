@@ -2,26 +2,25 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
-import confetti from 'canvas-confetti';
 import { useStore } from '@/context/StateFarmContext';
 import { AgentNav, type AgentView } from '@/components/ui/AgentNav';
-import { StatCounter } from '@/components/ui/StatCounter';
 import { ToolTrace } from '@/components/ui/ToolTrace';
 import { RiskFactor } from '@/components/ui/RiskFactor';
 import { StreamText } from '@/components/ui/StreamText';
 import { ClaimChip } from '@/components/ui/Chips';
 import { SIM, simTrace } from '@/components/agent/simScripts';
-import { first, hexId, initials, money, TIER_DARK, TIER_RANK, WATER_BACKUP } from '@/lib/hn';
+import { first, initials, money, TIER_DARK, TIER_RANK, WATER_BACKUP } from '@/lib/hn';
 import type { CustomerProfile, UrgencyLevel } from '@/types/statefarm';
 
 const TriageMap = dynamic(() => import('@/components/agent/TriageMap'), { ssr: false });
 
-const ROW_H = 84;
-const GRID = '32px 84px 104px minmax(0,1.6fr) minmax(0,1fr) 148px 100px';
-const DOT = { red: '#FF3B47', lavender: '#C9B6DA', blue: '#6FB6DC' } as const;
+const ROW_H = 68;
+const GRID = '28px 84px 64px minmax(0,1.6fr) minmax(0,1fr) 160px 96px';
+// Events in the transcript: one accent for things that need attention, neutral otherwise.
+const DOT = { red: '#FF6B73', lavender: '#6E6878', blue: '#8FC3DD' } as const;
 
-function Pulse({ color }: { color: string }) {
-  return <span className="inline-block w-2.5 h-2.5 rounded-full flex-none" style={{ background: color, ['--pc' as string]: color, animation: 'hnPulse 1.4s ease-out infinite' }} />;
+function Dot({ color }: { color: string }) {
+  return <span className="inline-block w-2 h-2 rounded-full flex-none" style={{ background: color }} />;
 }
 
 export default function AgentConsolePage() {
@@ -33,7 +32,6 @@ export default function AgentConsolePage() {
   const [panelOpen, setPanelOpen] = useState(false);
   const [msg, setMsg] = useState('');
   const [toast, setToast] = useState<string | null>(null);
-  const [flash, setFlash] = useState<Record<string, number>>({});
   const storeRef = useRef(store);
   storeRef.current = store;
 
@@ -49,19 +47,6 @@ export default function AgentConsolePage() {
   );
   const isDraft = (id: string) => claims[id]?.status === 'draft' || claims[id]?.status === 'submitted';
   const vis = sorted.filter((c) => (filter === 'All' ? true : filter === 'High' ? tier(c) === 'High' : isDraft(c.id)));
-
-  /* ---- Flash rows whose risk changed ---- */
-  const prevRisk = useRef<Record<string, number>>({});
-  useEffect(() => {
-    const now = Date.now();
-    const f: Record<string, number> = {};
-    customers.forEach((c) => {
-      const p = prevRisk.current[c.id];
-      if (p !== undefined && p !== c.riskScore) f[c.id] = now;
-      prevRisk.current[c.id] = c.riskScore;
-    });
-    if (Object.keys(f).length) setFlash((x) => ({ ...x, ...f }));
-  }, [customers]);
 
   /* ---- Simulated background Nora calls (catch up if the tab was hidden) ---- */
   const simProgress = (id: string) => (transcripts[id] || []).filter((l) => l.channel === 'call').length;
@@ -85,24 +70,15 @@ export default function AgentConsolePage() {
     return () => clearInterval(iv);
   }, [hydrated]);
 
-  /* ---- Live re-ranking jitter every 3s, with scripted bumps ---- */
+  /* ---- One scripted re-rank so the queue visibly reprioritizes (no constant jitter) ---- */
   useEffect(() => {
     if (!hydrated) return;
-    let tick = 0;
-    const iv = setInterval(() => {
-      tick++;
+    const t = setTimeout(() => {
       const s = storeRef.current;
-      const get = (id: string) => s.customers.find((c) => c.id === id);
-      if (tick === 3) s.patchCustomer('cust-3', { riskScore: 81, urgency: 'High', detectedHazard: 'Branch cracked · over bedroom' });
-      else if (tick === 5) s.patchCustomer('cust-6', { riskScore: Math.min(98, (get('cust-6')?.riskScore || 85) + 4) });
-      else if (tick === 9) s.patchCustomer('cust-4', { riskScore: 50 });
-      else if (tick > 9 && tick % 2 === 0) {
-        const live = s.customers.filter((c) => s.callStatus[c.id] === 'ai');
-        const c = live[tick % Math.max(1, live.length)];
-        if (c) s.patchCustomer(c.id, { riskScore: Math.max(40, Math.min(98, c.riskScore + (tick % 4 ? 1 : -1))) });
-      }
-    }, 3000);
-    return () => clearInterval(iv);
+      const c3 = s.customers.find((c) => c.id === 'cust-3');
+      if (c3 && c3.riskScore < 81) s.patchCustomer('cust-3', { riskScore: 81, urgency: 'High', detectedHazard: 'Branch cracked · over bedroom' });
+    }, 9000);
+    return () => clearTimeout(t);
   }, [hydrated]);
 
   /* ---- Selected policyholder ---- */
@@ -132,23 +108,22 @@ export default function AgentConsolePage() {
   const approve = () => {
     const num = store.approveClaimDraft(c.id);
     if (!num) return;
-    confetti({ particleCount: 110, spread: 75, origin: { y: 0.6 }, colors: ['#ED1D24', '#286784', '#EFD9CE', '#7D6F86', '#FFFFFF'] });
     showToast(`${num} approved and dispatched`);
   };
 
   const callText = (x: CustomerProfile): [string, string, boolean] => {
     const rq = contactRequests.find((r) => r.custId === x.id && r.status === 'waiting');
-    if (rq) return ['Wants a person', '#FF3B47', true];
+    if (rq) return ['Wants a person', '#FF6B73', true];
     const s = callStatus[x.id];
-    if (agentTakeover[x.id] && s !== 'ended') return ['You’re on the call', '#6FB6DC', true];
-    if (claims[x.id]?.status === 'approved') return ['Crew dispatched', '#6FB6DC', false];
-    if (s === 'ai') return [isDraft(x.id) ? 'Nora on call · draft' : 'Nora on call', '#FF3B47', true];
-    if (s === 'ringing') return ['Dialing…', '#C9B6DA', true];
-    if (s === 'ended') return ['Call ended', '#B9A6C9', false];
-    if (x.checkInStatus === 'completed') return ['Checked in · OK', '#6FB6DC', false];
-    if (x.checkInStatus === 'urgent_attention') return ['Needs follow-up', '#FF3B47', false];
-    if (x.checkInStatus === 'in_progress') return ['SMS check-in', '#B9A6C9', false];
-    return ['Not reached', '#C9B6DA', false];
+    if (agentTakeover[x.id] && s !== 'ended') return ['You’re on the call', '#F4F1F6', true];
+    if (claims[x.id]?.status === 'approved') return ['Crew dispatched', '#9A93A3', false];
+    if (s === 'ai') return ['Nora on call', '#F4F1F6', true];
+    if (s === 'ringing') return ['Dialing…', '#9A93A3', false];
+    if (s === 'ended') return ['Call ended', '#6E6878', false];
+    if (x.checkInStatus === 'completed') return ['Checked in · OK', '#9A93A3', false];
+    if (x.checkInStatus === 'urgent_attention') return ['Needs follow-up', '#F4F1F6', false];
+    if (x.checkInStatus === 'in_progress') return ['SMS check-in', '#9A93A3', false];
+    return ['Not reached', '#6E6878', false];
   };
 
   const waitingReqs = contactRequests.filter((r) => r.status !== 'closed');
@@ -189,36 +164,21 @@ export default function AgentConsolePage() {
         }}
       />
 
-      {/* Counter band */}
-      <div className="flex-none grid grid-cols-[minmax(0,1.3fr)_repeat(4,minmax(0,1fr))] border-b border-white/[.08] bg-void text-white">
-        <div className="px-6 py-4 flex flex-col gap-1.5 justify-center">
-          <span className="font-mono text-[12px] text-[#FF6B73]">MMXXVI · WINTER STORM · DALLAS COUNTY</span>
-          <span className="font-display font-black text-[32px] leading-none">CAT response</span>
-        </div>
-        {[
-          { hex: '0x96c · triaged', n: '2,412', label: 'Policyholders', c: '#fff' },
-          { hex: '0x0a1 · nora', n: counts.High, label: 'High urgency', c: '#FF3B47', glow: 'rgba(255,59,71,.6)' },
-          { hex: '0x3f7 · live', n: Object.values(callStatus).filter((s) => s === 'ai').length, label: 'Nora calls live', c: '#6FB6DC', glow: 'rgba(79,163,207,.5)' },
-          { hex: '0x5d2 · queue', n: contactRequests.filter((r) => r.status === 'waiting').length, label: 'Want a person', c: '#C9B6DA', glow: 'rgba(185,166,201,.5)' },
-        ].map((k) => (
-          <div key={k.hex} className="px-5 py-3.5 border-l border-white/[.08]">
-            <StatCounter agent hex={k.hex} n={k.n} label={k.label} color={k.c} glow={k.glow} />
-          </div>
-        ))}
-      </div>
-
       {/* Request strip */}
       {waitingReqs.length > 0 && (
-        <div className="flex-none flex gap-3 items-center px-6 py-3 bg-neon-red/[.14] border-b border-white/[.08] overflow-x-auto">
-          <span className="hn-label text-[13px] text-neon-red whitespace-nowrap">Talk-to-someone requests</span>
+        <div className="flex-none flex gap-3 items-center px-6 py-2.5 bg-panel border-b border-white/[.08] overflow-x-auto">
+          <span className="flex items-center gap-2 text-[14px] font-semibold whitespace-nowrap">
+            <Dot color="#FF6B73" />
+            Asked for a person
+          </span>
           {waitingReqs.map((r) => {
             const rc = customers.find((x) => x.id === r.custId);
             const acc = r.status === 'accepted';
             return (
-              <div key={r.id} className="flex-none flex items-center gap-3 pl-3.5 pr-2 py-2 rounded-[14px] bg-panel border-2 border-ink hn-in">
+              <div key={r.id} className="flex-none flex items-center gap-3 pl-3.5 pr-2 py-1.5 rounded-xl bg-panel-2 border border-white/[.08] hn-in">
                 <div className="flex flex-col leading-tight whitespace-nowrap">
                   <span className="font-bold text-[15px]">
-                    {rc?.name} · {r.fromCall ? 'Transfer from Nora call' : r.channel}
+                    {rc?.name} · {r.fromCall ? 'transfer from Nora' : 'callback'}
                   </span>
                   <span className="text-[13px] text-mist">
                     {r.topic} · {r.lang.toUpperCase()} · <span className="font-mono">{r.id}</span>
@@ -231,7 +191,7 @@ export default function AgentConsolePage() {
                     if (!acc) store.acceptContactRequest(r.id);
                   }}
                   className="h-[38px] px-3.5 rounded-full text-white font-bold text-sm cursor-pointer whitespace-nowrap"
-                  style={{ background: acc ? '#286784' : '#ED1D24' }}
+                  style={{ background: acc ? '#2A2A30' : '#ED1D24' }}
                 >
                   {acc ? 'Open' : 'Accept'}
                 </button>
@@ -256,12 +216,10 @@ export default function AgentConsolePage() {
           ) : (
             <>
               <div className="flex items-center gap-3 px-5 pt-[18px] pb-3.5">
-                <div className="font-display font-black text-[26px] leading-none">Priority queue</div>
-                <div className="flex items-center gap-1.5 font-mono text-sm text-neon-blue uppercase tracking-[.08em]">
-                  <Pulse color="#6FB6DC" />
-                  Live
+                <div className="font-semibold text-[22px] leading-none">Priority queue</div>
+                <div className="text-mist text-[15px] whitespace-nowrap">
+                  {counts.High} high · {Object.values(callStatus).filter((v) => v === 'ai').length} on calls with Nora · sorted by urgency, then risk
                 </div>
-                <div className="text-mist text-[15px] whitespace-nowrap">Urgency, then risk score</div>
                 <div className="flex-1" />
                 <div className="flex gap-0.5 p-[3px] rounded-[9px] bg-panel-2 border border-white/[.08]">
                   {(['All', 'High', 'Drafts'] as const).map((k) => (
@@ -293,7 +251,6 @@ export default function AgentConsolePage() {
                     const isSel = x.id === sel;
                     const t = tier(x);
                     const [st, stc, pulse] = callText(x);
-                    const rc = x.riskScore >= 85 ? '#FF3B47' : x.riskScore >= 65 ? '#C9B6DA' : '#6FB6DC';
                     return (
                       <div
                         key={x.id}
@@ -305,35 +262,30 @@ export default function AgentConsolePage() {
                           opacity: r < 0 ? 0 : 1,
                           pointerEvents: r < 0 ? 'none' : 'auto',
                           gridTemplateColumns: GRID,
-                          background: isSel ? 'rgba(255,59,71,.08)' : 'transparent',
-                          borderLeft: `3px solid ${isSel ? '#FF3B47' : 'transparent'}`,
-                          transition: 'top .8s cubic-bezier(.2,.8,.2,1), opacity .3s, background .6s',
+                          background: isSel ? 'rgba(255,255,255,.05)' : 'transparent',
+                          borderLeft: `3px solid ${isSel ? '#F4F1F6' : 'transparent'}`,
+                          transition: 'top .6s ease, opacity .3s',
                         }}
                       >
-                        {/* Re-keyed when the risk score changes so the 1.8s tint flash replays. */}
-                        {flash[x.id] && <span key={flash[x.id]} className="absolute inset-0 pointer-events-none" style={{ animation: 'hnFlash 1.8s ease-out forwards' }} />}
-                        <div className="font-mono text-base text-mist">{String(sorted.indexOf(x) + 1).padStart(2, '0')}</div>
+                        <div className="font-mono text-sm text-[#6E6878]">{sorted.indexOf(x) + 1}</div>
                         <div className="flex items-center gap-1">
-                          <span className="px-2.5 py-[3px] rounded-md font-bold text-[15px]" style={{ background: TIER_DARK[t].bg, color: TIER_DARK[t].fg }}>
+                          <span className="px-2 py-[2px] rounded-md font-semibold text-[13px]" style={{ background: TIER_DARK[t].bg, color: TIER_DARK[t].fg }}>
                             {t}
                           </span>
-                          {priorityOverride[x.id] && <span title="Manually set" className="font-mono text-[12px] text-mist">MAN</span>}
+                          {priorityOverride[x.id] && <span title="Set manually" className="text-[11px] text-mist">manual</span>}
                         </div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono font-bold text-xl w-[26px]">{x.riskScore}</span>
-                          <div className="flex-1 h-1 rounded bg-white/10 overflow-hidden">
-                            <div className="h-full rounded" style={{ width: `${x.riskScore}%`, background: rc, boxShadow: `0 0 8px ${rc}`, transition: 'width .8s' }} />
-                          </div>
+                        <div className="font-mono text-[17px]" style={{ color: t === 'High' ? '#F4F1F6' : '#9A93A3' }}>
+                          {x.riskScore}
                         </div>
                         <div className="min-w-0 flex flex-col gap-0.5">
-                          <div className="font-semibold text-lg truncate">{x.name}</div>
-                          <div className="text-[14px] text-mist truncate">
-                            {x.age} · {x.livesAlone ? 'Lives alone' : 'With family'} · {x.language.toUpperCase()} · <span className="font-mono">{hexId(x.id)}</span>
+                          <div className="font-semibold text-[16px] truncate">{x.name}</div>
+                          <div className="text-[13px] text-mist truncate">
+                            {x.age} · {x.livesAlone ? 'Lives alone' : 'With family'} · {x.language === 'es' ? 'Spanish' : 'English'}
                           </div>
                         </div>
-                        <div className="min-w-0 text-base truncate">{x.detectedHazard}</div>
-                        <div className="flex items-center gap-[7px] text-[15px] font-medium whitespace-nowrap overflow-hidden" style={{ color: stc }}>
-                          {pulse ? <Pulse color={stc} /> : <span className="inline-block w-2.5 h-2.5 rounded-full flex-none" style={{ background: stc }} />}
+                        <div className="min-w-0 text-[14px] text-[#D9D2DE] truncate">{x.detectedHazard}</div>
+                        <div className="flex items-center gap-2 text-[14px] whitespace-nowrap overflow-hidden" style={{ color: stc }}>
+                          {pulse && <Dot color={stc === '#FF6B73' ? stc : '#8FC3DD'} />}
                           {st}
                         </div>
                         <div>
@@ -359,7 +311,7 @@ export default function AgentConsolePage() {
               </div>
             </div>
             <button onClick={() => setPanelOpen(true)} className="h-[42px] px-3 rounded-lg border border-white/[.08] bg-transparent text-ink text-[15px] cursor-pointer whitespace-nowrap">
-              Explainability
+              Details
             </button>
             {!takeover && (
               <button
@@ -368,7 +320,6 @@ export default function AgentConsolePage() {
                   store.stepIn(c.id);
                 }}
                 className="h-[42px] px-3.5 rounded-lg bg-sf-red text-white font-semibold text-[15px] cursor-pointer whitespace-nowrap"
-                style={{ animation: live ? 'hnGlow 2.4s ease-in-out infinite' : undefined }}
               >
                 {live ? 'Step in' : 'Call now'}
               </button>
@@ -376,17 +327,11 @@ export default function AgentConsolePage() {
           </div>
           <div
             className="px-[18px] py-2.5 flex items-center gap-2 text-[15px] border-b border-white/[.08]"
-            style={
-              takeover
-                ? { background: 'rgba(79,163,207,.14)', color: '#6FB6DC' }
-                : live
-                  ? { background: 'rgba(255,59,71,.14)', color: '#FF3B47' }
-                  : { background: '#1C1C21', color: '#B9A6C9' }
-            }
+            style={{ background: '#1C1C21', color: live || takeover ? '#F4F1F6' : '#9A93A3' }}
           >
-            {(live || takeover) && <Pulse color={takeover ? '#6FB6DC' : '#FF3B47'} />}
+            {(live || takeover) && <Dot color="#8FC3DD" />}
             <span className="font-semibold">{takeover ? 'You took over from Nora.' : live ? 'Nora is on the call.' : 'No live call.'}</span>
-            <span className="opacity-80">{takeover ? 'AI is paused and watching.' : live ? 'You can step in at any time.' : cs === 'ended' ? 'Call ended.' : ''}</span>
+            <span className="text-mist">{takeover ? 'AI is paused and watching.' : live ? 'You can step in at any time.' : cs === 'ended' ? 'Call ended.' : ''}</span>
           </div>
 
           <div ref={scrollRef} className="flex-1 overflow-y-auto overflow-x-hidden px-[18px] py-4 flex flex-col gap-3">
@@ -407,7 +352,7 @@ export default function AgentConsolePage() {
                 return (
                   <div key={l.id} className="border border-white/[.08] rounded-xl px-3.5 py-3 flex items-center gap-3 bg-panel-2 hn-in">
                     <div className="flex-1 flex flex-col gap-0.5">
-                      <div className="font-mono font-bold text-[13px] uppercase tracking-[.06em]" style={{ color: appr ? '#6FB6DC' : '#C9B6DA' }}>
+                      <div className="text-[12px] font-semibold uppercase tracking-[.06em]" style={{ color: appr ? '#8FC3DD' : '#9A93A3' }}>
                         {appr ? 'Approved' : claim.status === 'submitted' ? 'Submitted by policyholder · needs approval' : 'Draft · needs approval'}
                       </div>
                       <div className="font-semibold text-[17px]">
@@ -425,15 +370,15 @@ export default function AgentConsolePage() {
               }
               if (l.kind === 'handoff')
                 return (
-                  <div key={l.id} className="rounded-xl p-3.5 bg-neon-blue/[.14] border border-white/[.08] flex flex-col gap-2 hn-in">
+                  <div key={l.id} className="rounded-xl p-3.5 bg-panel-2 border border-white/[.08] flex flex-col gap-2 hn-in">
                     <div className="flex items-center gap-2">
-                      <span className="hn-label text-[13px] text-neon-blue">AI handoff summary</span>
+                      <span className="text-[13px] font-semibold">Nora&apos;s handoff summary</span>
                       <span className="flex-1" />
                       <span className="font-mono text-[13px] text-mist">{l.time}</span>
                     </div>
                     {l.items?.map((it, i) => (
                       <div key={i} className="flex gap-2 text-[15px] leading-snug">
-                        <span className="text-neon-blue font-mono">→</span>
+                        <span className="text-mist">•</span>
                         <span>{it}</span>
                       </div>
                     ))}
@@ -442,12 +387,12 @@ export default function AgentConsolePage() {
               const right = l.kind !== 'cust';
               return (
                 <div key={l.id} className="flex flex-col gap-1 hn-in" style={{ alignItems: right ? 'flex-end' : 'flex-start' }}>
-                  <div className="hn-label text-[12px] text-mist">
-                    {l.kind === 'ai' ? 'Nora · AI' : l.kind === 'agent' ? 'Jordan M. · You' : first(c.name)} · {l.channel === 'chat' ? 'chat' : 'call'} · {l.time}
+                  <div className="text-[12px] text-mist">
+                    {l.kind === 'ai' ? 'Nora (AI)' : l.kind === 'agent' ? 'You' : first(c.name)} · {l.time}
                   </div>
                   <div
                     className="max-w-[86%] px-3 py-2.5 rounded-xl text-[16px] leading-snug"
-                    style={{ background: l.kind === 'ai' ? 'rgba(79,163,207,.14)' : l.kind === 'agent' ? 'rgba(255,59,71,.14)' : '#1C1C21' }}
+                    style={{ background: l.kind === 'cust' ? '#1C1C21' : l.kind === 'agent' ? 'rgba(255,255,255,.10)' : 'rgba(255,255,255,.05)' }}
                   >
                     <StreamText text={l.text} animate={animate} />
                   </div>
@@ -541,7 +486,7 @@ export default function AgentConsolePage() {
               <div className="hn-label text-[13px] text-mist">Recommended actions</div>
               {ex.recommendedActions.map((a, i) => (
                 <div key={i} className="flex gap-2.5 text-[15px] leading-snug">
-                  <span className="font-mono font-bold text-[13px] text-neon-red">{String(i + 1).padStart(2, '0')}</span>
+                  <span className="font-mono text-[13px] text-mist">{i + 1}.</span>
                   <span>{a}</span>
                 </div>
               ))}
@@ -579,14 +524,14 @@ export default function AgentConsolePage() {
                   </div>
                   <div className="text-sm text-mist leading-relaxed">{claim.description}</div>
                   {Object.keys(claim.confirmed).length > 0 && (
-                    <div className="font-mono text-[12px] text-neon-blue">{Object.keys(claim.confirmed).length}/8 fields confirmed by policyholder</div>
+                    <div className="text-[13px] text-mist">{Object.keys(claim.confirmed).length} of 8 details confirmed by the policyholder</div>
                   )}
                   {claim.status !== 'approved' ? (
-                    <button onClick={approve} className="h-[52px] rounded-[10px] bg-sf-red text-white font-bold text-lg cursor-pointer" style={{ animation: 'hnGlow 2.4s ease-in-out infinite' }}>
-                      1-Click Approve Claim &amp; Dispatch
+                    <button onClick={approve} className="h-12 rounded-[10px] bg-sf-red text-white font-semibold text-base cursor-pointer">
+                      Approve claim &amp; dispatch
                     </button>
                   ) : (
-                    <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-neon-blue/[.14] text-neon-blue font-semibold">
+                    <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-white/[.05] text-[#8FC3DD] font-semibold">
                       <span className="font-mono">✓</span>
                       {claim.number} · crew dispatched
                     </div>

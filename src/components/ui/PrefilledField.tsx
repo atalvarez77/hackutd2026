@@ -1,4 +1,5 @@
 import type { SourceKind } from '@/lib/claim';
+import { tx } from '@/lib/i18n';
 
 const DOT: Record<SourceKind, string> = { call: '#ED1D24', policy: '#286784', transcript: '#7D6F86' };
 
@@ -31,7 +32,7 @@ export function PrefilledField({
         <span className="flex items-center gap-1.5 font-mono text-[12px] text-lavender">
           <span className="w-[7px] h-[7px] rounded-sm" style={{ background: DOT[kind] }} />
           {(lang === 'es' ? 'De ' : 'From ') + src}
-          {confirmedBy && confirmedBy !== 'portal' && <span className="text-blue">· {confirmedBy}</span>}
+          {confirmedBy && confirmedBy !== 'portal' && <span className="text-blue">· {tx(confirmedBy, lang)}</span>}
         </span>
       </div>
       <button

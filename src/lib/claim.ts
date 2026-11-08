@@ -1,5 +1,6 @@
 import type { ClaimFlow, CustomerProfile, Language } from '@/types/statefarm';
 import { coverageVerdict, isWaterHazard, lastCustomerQuote, money, WATER_BACKUP } from './hn';
+import { lossDate, tx } from './i18n';
 
 export type SourceKind = 'call' | 'policy' | 'transcript';
 
@@ -17,8 +18,8 @@ export function claimFields(c: CustomerProfile, claim: ClaimFlow, lang: Language
   const water = isWaterHazard(claim.type + ' ' + c.detectedHazard);
   return [
     [
-      { key: 'type', label: es ? 'Qué pasó' : 'What happened', value: c.detectedHazard, src: es ? 'su llamada con Nora' : 'your call with Nora', kind: 'call' },
-      { key: 'when', label: es ? 'Cuándo' : 'When', value: 'Nov 7, 2026 · ~6:00 AM', src: es ? 'lo que dijo + línea de helada NWS' : 'what you told Nora + NWS freeze timeline', kind: 'call' },
+      { key: 'type', label: es ? 'Qué pasó' : 'What happened', value: tx(c.detectedHazard, lang), src: es ? 'su llamada con Nora' : 'your call with Nora', kind: 'call' },
+      { key: 'when', label: es ? 'Cuándo' : 'When', value: lossDate(lang), src: es ? 'lo que dijo + línea de helada NWS' : 'what you told Nora + NWS freeze timeline', kind: 'call' },
       { key: 'where', label: es ? 'Dónde' : 'Where', value: `${c.address}, ${c.city} ${c.state} ${c.zip}`, src: es ? 'dirección de su póliza' : 'your policy address on file', kind: 'policy' },
       { key: 'quote', label: es ? 'En sus palabras' : 'In your words', value: lastCustomerQuote(c), src: es ? 'transcripción de Nora' : 'Nora transcript', kind: 'transcript' },
     ],
@@ -28,7 +29,7 @@ export function claimFields(c: CustomerProfile, claim: ClaimFlow, lang: Language
         ? { key: 'shut', label: es ? '¿Cerró la llave principal?' : 'Water shut off at the main?', value: es ? 'Nora le mandó los pasos' : 'Nora sent the steps', src: es ? 'su llamada con Nora' : 'your call with Nora', kind: 'call' }
         : { key: 'shut', label: es ? '¿El área está segura?' : 'Is the area secured?', value: es ? 'Lejos de la zona dañada' : 'Staying away from the damaged area', src: es ? 'su llamada con Nora' : 'your call with Nora', kind: 'call' },
       { key: 'heat', label: es ? 'Calefacción' : 'Heat source', value: es ? 'Calentador a 1 m de distancia' : 'Space heater · 3 ft clearance advised', src: es ? 'su llamada con Nora' : 'your call with Nora', kind: 'transcript' },
-      { key: 'notify', label: es ? 'A quién avisamos' : 'Who we told', value: `${c.emergencyContact.name} (${c.emergencyContact.relationship}) · ${c.emergencyContact.phone}`, src: es ? 'contactos de emergencia' : 'emergency contacts on file', kind: 'policy' },
+      { key: 'notify', label: es ? 'A quién avisamos' : 'Who we told', value: `${c.emergencyContact.name} (${tx(c.emergencyContact.relationship, lang)}) · ${c.emergencyContact.phone}`, src: es ? 'contactos de emergencia' : 'emergency contacts on file', kind: 'policy' },
     ],
   ];
 }
@@ -38,12 +39,13 @@ export const STEP_KEYS = [
   ['safe', 'shut', 'heat', 'notify'],
 ];
 
-export function coverageCards(c: CustomerProfile) {
+export function coverageCards(c: CustomerProfile, lang: Language = 'en') {
+  const es = lang === 'es';
   return [
-    { k: 'POLICY', v: c.policy.policyNumber, src: c.policy.type },
-    { k: 'DWELLING', v: money(c.policy.coverageLimit), src: 'Coverage A' },
-    { k: 'DEDUCTIBLE', v: money(c.policy.deductible), src: 'Declarations page' },
-    { k: 'WATER BACKUP', v: WATER_BACKUP[c.id], src: 'Endorsement' },
+    { k: es ? 'PÓLIZA' : 'POLICY', v: c.policy.policyNumber, src: tx(c.policy.type, lang) },
+    { k: es ? 'VIVIENDA' : 'DWELLING', v: money(c.policy.coverageLimit), src: es ? 'Cobertura A' : 'Coverage A' },
+    { k: es ? 'DEDUCIBLE' : 'DEDUCTIBLE', v: money(c.policy.deductible), src: es ? 'Página de declaraciones' : 'Declarations page' },
+    { k: es ? 'RESPALDO DE AGUA' : 'WATER BACKUP', v: tx(WATER_BACKUP[c.id], lang), src: es ? 'Endoso' : 'Endorsement' },
   ];
 }
 
@@ -55,7 +57,7 @@ export function verdictCopy(c: CustomerProfile, claim: ClaimFlow, lang: Language
     ? {
         covered,
         title: es ? 'Esto parece estar cubierto.' : 'This looks covered.',
-        body: (es ? `Su ${c.policy.type} parece cubrir esto. Deducible: ${money(c.policy.deductible)}.` : `Sudden, accidental damage like this looks covered under your ${c.policy.type}. Your deductible is ${money(c.policy.deductible)}.`) + tail,
+        body: (es ? `Su póliza (${tx(c.policy.type, lang)}) parece cubrir esto. Deducible: ${money(c.policy.deductible)}.` : `Sudden, accidental damage like this looks covered under your ${c.policy.type}. Your deductible is ${money(c.policy.deductible)}.`) + tail,
       }
     : {
         covered,

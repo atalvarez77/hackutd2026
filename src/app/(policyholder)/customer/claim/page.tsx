@@ -7,7 +7,8 @@ import { ClaimStepper } from '@/components/ui/ClaimStepper';
 import { PrefilledField } from '@/components/ui/PrefilledField';
 import { NoraWave } from '@/components/ui/NoraWave';
 import { CLAIM_STEPS, claimFields, coverageCards, STEP_KEYS, verdictCopy } from '@/lib/claim';
-import { first, hexId, money } from '@/lib/hn';
+import { first, money } from '@/lib/hn';
+import { lossDate, tx } from '@/lib/i18n';
 
 export default function ClaimPage() {
   const { activeCustomer, hydrated, claims } = useStore();
@@ -93,12 +94,12 @@ function ClaimFlowView() {
             </h1>
             <p className="m-0 max-w-[640px] text-lg leading-relaxed text-grey">
               {fromCall
-                ? T('You confirmed most of this on your call with Nora. Anything marked “Confirmed on call” is done. Check the rest and change anything that’s wrong.', 'Usted confirmó casi todo en su llamada con Nora. Lo marcado “Confirmed on call” ya está listo. Revise lo demás.')
+                ? T('You confirmed most of this on your call with Nora. Anything marked “Confirmed on call” is done. Check the rest and change anything that’s wrong.', 'Usted confirmó casi todo en su llamada con Nora. Lo marcado “Confirmado en la llamada” ya está listo. Revise lo demás.')
                 : T('She only filled in what State Farm already has: your policy, your address, tonight’s weather, and what you told her. Check each step and change anything that’s wrong.', 'Solo usó lo que State Farm ya tiene: su póliza, su dirección, el clima y lo que usted le dijo. Revise cada paso.')}
             </p>
           </div>
           <div className="px-5 py-4 rounded-[18px] bg-charcoal text-white flex flex-col gap-1 min-w-[220px]">
-            <span className="font-mono text-[12px] text-mist">run {hexId(c.id, 1)} · {c.policy.policyNumber}</span>
+            <span className="font-mono text-[12px] text-mist">{c.policy.policyNumber}</span>
             <span className="font-display font-black text-5xl leading-none text-neon-red">{pct}%</span>
             <span className="hn-label text-[11px] text-mist">{T('Claim progress', 'Progreso')}</span>
           </div>
@@ -165,7 +166,7 @@ function ClaimFlowView() {
             {!done && n === 3 && (
               <>
                 <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(180px,1fr))]">
-                  {coverageCards(c).map((cv) => (
+                  {coverageCards(c, c.language).map((cv) => (
                     <div key={cv.k} className="p-4 rounded-2xl bg-petal-50 flex flex-col gap-1">
                       <span className="hn-label text-[11px] text-grey">{cv.k}</span>
                       <span className="font-mono font-bold text-xl">{cv.v}</span>
@@ -186,12 +187,12 @@ function ClaimFlowView() {
                   {[
                     [T('Policyholder', 'Asegurado'), c.name],
                     [T('Policy', 'Póliza'), c.policy.policyNumber],
-                    [T('Loss', 'Daño'), claim.type],
-                    [T('Date', 'Fecha'), 'Nov 7, 2026 · ~6:00 AM'],
+                    [T('Loss', 'Daño'), tx(claim.type, c.language)],
+                    [T('Date', 'Fecha'), lossDate(c.language)],
                     [T('Location', 'Lugar'), `${c.address}, ${c.city} ${c.state}`],
                     [T('Estimate', 'Estimado'), money(claim.amount)],
                     [T('Deductible', 'Deducible'), money(c.policy.deductible)],
-                    [T('Photos', 'Fotos'), photos.filter(Boolean).length ? `${photos.filter(Boolean).length} added` : T('Skipped (adjuster will take them)', 'Omitidas (el ajustador las tomará)')],
+                    [T('Photos', 'Fotos'), photos.filter(Boolean).length ? T(`${photos.filter(Boolean).length} added`, `${photos.filter(Boolean).length} agregadas`) : T('Skipped (adjuster will take them)', 'Omitidas (el ajustador las tomará)')],
                     [T('Contact notified', 'Contacto avisado'), `${c.emergencyContact.name} · ${c.emergencyContact.phone}`],
                   ].map(([k, v]) => (
                     <div key={k} className="contents">
@@ -217,7 +218,7 @@ function ClaimFlowView() {
                   <span className="text-[15px] text-petal">{T('What happens next, and roughly when:', 'Lo que sigue y cuándo:')}</span>
                 </div>
                 {[
-                  [T('Adjuster assigned', 'Ajustador asignado'), 'Jordan Mills, CAT team · Dallas', T('Within 24h', 'En 24h')],
+                  [T('Adjuster assigned', 'Ajustador asignado'), T('Jordan Mills, CAT team · Dallas', 'Jordan Mills, equipo de catástrofes · Dallas'), T('Within 24h', 'En 24h')],
                   [T('Estimate', 'Estimado'), T('An inspection to price the repair', 'Una inspección para calcular la reparación'), T('1–3 days', '1–3 días')],
                   [T('Payment', 'Pago'), T(`Repair cost minus your ${money(c.policy.deductible)} deductible`, `Costo menos su deducible de ${money(c.policy.deductible)}`), T('After estimate', 'Tras el estimado')],
                 ].map(([label, body, st], i) => {
@@ -236,7 +237,7 @@ function ClaimFlowView() {
                         <span className="text-sm text-grey">{body}</span>
                       </span>
                       <span className="font-mono font-bold text-[13px]" style={{ color: on ? '#286784' : '#7D6F86' }}>
-                        {on ? 'DONE' : st}
+                        {on ? T('DONE', 'LISTO') : st}
                       </span>
                     </div>
                   );

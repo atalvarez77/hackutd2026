@@ -1,10 +1,12 @@
 'use client';
 
+import { useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useStore } from '@/context/StateFarmContext';
 import { Logo } from '@/components/brand/Logo';
 import { initials } from '@/lib/hn';
+import { tx } from '@/lib/i18n';
 
 const TABS = [
   { href: '/', en: 'Home', es: 'Inicio' },
@@ -17,6 +19,11 @@ export function PolicyNav() {
   const { customers, activeCustomer, setActiveCustomerId, updateCustomerLanguage } = useStore();
   const lang = activeCustomer.language;
 
+  // Keep <html lang> in sync so screen readers and speech pick the right language.
+  useEffect(() => {
+    document.documentElement.lang = lang;
+  }, [lang]);
+
   return (
     <>
       {/* Utility strip */}
@@ -24,11 +31,11 @@ export function PolicyNav() {
         <div className="max-w-[1280px] mx-auto px-[clamp(16px,3vw,40px)] py-2 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
           <span className="flex items-center gap-2 font-semibold">
             <span className="w-2 h-2 rounded-full bg-sf-red" />
-            {activeCustomer.weatherAlert.title} · {activeCustomer.city}
+            {tx(activeCustomer.weatherAlert.title, lang)} · {activeCustomer.city}
           </span>
           <span className="flex-1" />
           <label className="flex items-center gap-2 text-[#B4A9BC]">
-            <span className="hn-label text-[10px]">Demo · acting as</span>
+            <span className="hn-label text-[10px]">{lang === 'es' ? 'Demo · usuario' : 'Demo · acting as'}</span>
             <select
               value={activeCustomer.id}
               onChange={(e) => setActiveCustomerId(e.target.value)}

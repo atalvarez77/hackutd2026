@@ -5,9 +5,10 @@ import Link from 'next/link';
 import { useStore } from '@/context/StateFarmContext';
 import { NoraWave } from '@/components/ui/NoraWave';
 import { money } from '@/lib/hn';
+import { tx } from '@/lib/i18n';
 
 export function NoraChat() {
-  const { activeCustomer: c, transcripts, claims, sendChatMessage } = useStore();
+  const { activeCustomer: c, transcripts, claims, sendChatMessage, createContactRequest, appendLine } = useStore();
   const es = c.language === 'es';
   const T = (en: string, sp: string) => (es ? sp : en);
   const [input, setInput] = useState('');
@@ -26,13 +27,24 @@ export function NoraChat() {
     setPending(true);
     const r = await sendChatMessage(text);
     setPending(false);
-    if (r === 'person') document.getElementById('person')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (r === 'person') {
+      // No separate "talk to a person" screen: a person simply calls them back.
+      createContactRequest(c.id, 'call', 'Callback requested from chat');
+      appendLine(c.id, {
+        kind: 'ai',
+        channel: 'chat',
+        text: es
+          ? `Claro. Un agente de State Farm le llamará al ${c.phone} en unos minutos. Ya sabe lo que hemos hablado.`
+          : `Of course. A State Farm agent will call you at ${c.phone} in a few minutes. They’ll already know what we talked about.`,
+        tr: es ? `Of course. A State Farm agent will call you at ${c.phone} in a few minutes.` : undefined,
+      });
+    }
   };
 
   const quick = es ? ['Se congeló la tubería', 'Estoy bien', 'Necesito una persona'] : ['My pipes froze', 'I’m okay', 'I need a person'];
 
   return (
-    <section className="border-2 border-charcoal rounded-3xl overflow-hidden flex flex-col min-h-[560px]">
+    <section className="border-2 border-charcoal rounded-3xl overflow-hidden flex flex-col min-h-[440px]">
       <div className="px-[22px] py-[18px] border-b-2 border-charcoal flex items-center gap-3">
         <span className="w-[52px] h-[52px] rounded-[14px] bg-charcoal flex items-center justify-center flex-none">
           <NoraWave speaking={pending} />
@@ -43,14 +55,14 @@ export function NoraChat() {
         </div>
       </div>
 
-      <div ref={scrollRef} className="flex-1 max-h-[460px] overflow-y-auto px-[22px] py-5 flex flex-col gap-3 bg-petal-25">
+      <div ref={scrollRef} className="flex-1 max-h-[360px] overflow-y-auto px-[22px] py-5 flex flex-col gap-3 bg-petal-25">
         {lines.map((l) =>
           l.kind === 'claim' ? (
             claim && claim.status !== 'none' ? (
               <Link key={l.id} href="/customer/claim" className="self-start w-[min(100%,360px)] rounded-2xl border-2 border-charcoal bg-white no-underline overflow-hidden hn-in">
                 <div className="px-3.5 py-2.5 bg-sf-red text-white hn-label text-[13px]">{T('Claim pre-filed for you', 'Reclamo pre-llenado para usted')}</div>
                 <div className="p-3.5 flex flex-col gap-1.5">
-                  <span className="font-display font-black text-xl">{claim.type}</span>
+                  <span className="font-display font-black text-xl">{tx(claim.type, c.language)}</span>
                   <span className="flex justify-between text-sm text-grey">
                     <span className="font-mono">{claim.number || claim.id}</span>
                     <span className="font-mono font-bold text-[15px] text-charcoal">{money(claim.amount)}</span>

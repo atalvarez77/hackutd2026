@@ -1,122 +1,88 @@
 'use client';
 
-import Link from 'next/link';
 import { useStore } from '@/context/StateFarmContext';
 import { NoraChat } from '@/components/portal/NoraChat';
 import { WelfareCall } from '@/components/portal/WelfareCall';
-import { first, money, TIER_LIGHT } from '@/lib/hn';
+import { CallSummary } from '@/components/portal/CallSummary';
+import { first, TIER_LIGHT } from '@/lib/hn';
+import { makeT, tx } from '@/lib/i18n';
 
+/**
+ * The portal mirrors a phone call. Left: the call itself (on a real phone, that's all the
+ * policyholder needs). Right: what Nora has done on the call, filling in live.
+ */
 export default function PortalPage() {
-  const { activeCustomer: c, claims } = useStore();
-  const es = c.language === 'es';
-  const T = (en: string, sp: string) => (es ? sp : en);
-  const claim = claims[c.id];
-  const hasDraft = !!claim && claim.status !== 'none';
-  const stage = !hasDraft ? 0 : claim.status === 'approved' ? 4 : claim.status === 'submitted' ? 2 : 1;
-  const stages = es ? ['Borrador', 'Revisión', 'Aprobado', 'Enviado'] : ['Drafted', 'Agent review', 'Approved', 'Crew sent'];
+  const { activeCustomer: c } = useStore();
+  const lang = c.language;
+  const T = makeT(lang);
 
   return (
     <>
       <section className="bg-petal">
-        <div className="max-w-[1280px] mx-auto px-[clamp(16px,3vw,40px)] py-9 flex flex-wrap items-end justify-between gap-5">
-          <div className="flex flex-col gap-2.5">
+        <div className="max-w-[1280px] mx-auto px-[clamp(16px,3vw,40px)] py-8 flex flex-wrap items-end justify-between gap-5">
+          <div className="flex flex-col gap-2">
             <div className="hn-label text-sm text-sf-red">{T('My portal', 'Mi portal')}</div>
-            <h1 className="m-0 font-display font-black leading-none text-[clamp(40px,4.6vw,64px)]">
+            <h1 className="m-0 font-display font-black leading-none text-[clamp(40px,4.6vw,60px)]">
               {T('Hi', 'Hola')}, {first(c.name)}.
             </h1>
             <div className="text-[17px] text-grey">
-              {c.policy.type} · <span className="font-mono">{c.policy.policyNumber}</span> · {c.city} {c.state}
+              {tx(c.policy.type, lang)} · <span className="font-mono">{c.policy.policyNumber}</span> · {c.city} {c.state}
             </div>
           </div>
           <div className="flex gap-3 flex-wrap">
             <div className="px-[18px] py-3.5 rounded-2xl bg-white flex flex-col gap-0.5 min-w-[150px]">
-              <span className="hn-label text-[10px] text-grey">{T('Storm risk', 'Riesgo')}</span>
+              <span className="hn-label text-[10px] text-grey">{T('Storm risk', 'Riesgo por tormenta')}</span>
               <span className="font-mono font-bold text-[30px]" style={{ color: TIER_LIGHT[c.urgency] }}>
                 {c.riskScore}
               </span>
             </div>
             <div className="px-[18px] py-3.5 rounded-2xl bg-white flex flex-col gap-0.5 min-w-[180px] max-w-[300px]">
               <span className="hn-label text-[10px] text-grey">{T('Detected hazard', 'Peligro detectado')}</span>
-              <span className="font-bold text-lg leading-snug">{c.detectedHazard}</span>
+              <span className="font-bold text-lg leading-snug">{tx(c.detectedHazard, lang)}</span>
             </div>
           </div>
         </div>
       </section>
 
-      <div className="max-w-[1280px] w-full mx-auto px-[clamp(16px,3vw,40px)] pt-9 pb-16 grid gap-7 items-start grid-cols-1 lg:grid-cols-2">
-        {/* On phones the call comes first: it's the fastest way to get everything done. */}
-        <div className="order-2 lg:order-1 flex flex-col gap-7">
-          <NoraChat />
+      <div className="max-w-[1280px] w-full mx-auto px-[clamp(16px,3vw,40px)] pt-9 pb-16 grid gap-8 items-start grid-cols-1 lg:grid-cols-2">
+        {/* Left: the call. Sticky on desktop so it stays in view while the summary grows. */}
+        <div className="lg:sticky lg:top-[100px] flex flex-col items-center gap-3">
+          <WelfareCall key={c.id} />
+        </div>
+
+        {/* Right: what happened on the call, plus the slower channels. */}
+        <div className="flex flex-col gap-6">
+          <CallSummary />
+
           <section id="contacts" className="rounded-3xl border-2 border-charcoal p-6 flex flex-col gap-3 scroll-mt-[110px]">
-            <span className="font-display font-black text-[28px]">{T('Emergency contacts', 'Contactos de emergencia')}</span>
-            <div className="flex items-center gap-3 py-3 border-t border-charcoal/12">
+            <span className="font-display font-black text-[24px] leading-none">{T('Emergency contact', 'Contacto de emergencia')}</span>
+            <div className="flex items-center gap-3">
               <span className="w-10 h-10 rounded-full bg-petal flex items-center justify-center font-display font-black text-[15px]">{c.emergencyContact.name[0]}</span>
               <div className="flex-1 flex flex-col">
                 <span className="font-bold text-base">{c.emergencyContact.name}</span>
                 <span className="text-sm text-grey">
-                  {c.emergencyContact.relationship} · <span className="font-mono">{c.emergencyContact.phone}</span>
+                  {tx(c.emergencyContact.relationship, lang)} · <span className="font-mono">{c.emergencyContact.phone}</span>
                 </span>
               </div>
               <button className="h-[38px] px-3.5 rounded-full border-2 border-charcoal/20 bg-white font-bold text-[13px] cursor-pointer">{T('Edit', 'Editar')}</button>
             </div>
+            <span className="text-[13px] text-grey">
+              {T('Nora texts them if she finds a problem or can’t reach you.', 'Nora le avisa por mensaje si encuentra un problema o no logra comunicarse con usted.')}
+            </span>
           </section>
-        </div>
 
-        <div className="order-1 lg:order-2 flex flex-col gap-7">
-          <WelfareCall key={c.id} />
-
-          <section id="claims" className="rounded-3xl border-2 border-charcoal p-6 flex flex-col gap-4 scroll-mt-[110px]">
-            <div className="flex items-baseline gap-2.5">
-              <span className="font-display font-black text-[28px]">{T('Claims', 'Reclamos')}</span>
-              <span className="flex-1" />
-              <span className="hn-label text-[13px] text-lavender">
-                {claim?.status === 'approved' ? T('Approved', 'Aprobado') : claim?.status === 'submitted' ? T('Submitted', 'Enviado') : hasDraft ? T('Draft', 'Borrador') : ''}
+          <details className="group rounded-3xl border-2 border-charcoal/15 open:border-charcoal">
+            <summary className="list-none cursor-pointer px-6 py-5 flex items-center gap-3">
+              <span className="flex-1 flex flex-col">
+                <span className="font-bold text-[17px]">{T('Can’t talk right now?', '¿No puede hablar ahora?')}</span>
+                <span className="text-sm text-grey">{T('Text Nora instead. Same help, same claim.', 'Escríbale a Nora. La misma ayuda, el mismo reclamo.')}</span>
               </span>
+              <span className="font-mono text-grey group-open:rotate-90 transition-transform">▸</span>
+            </summary>
+            <div className="px-3 pb-3">
+              <NoraChat />
             </div>
-            {hasDraft ? (
-              <div className="flex flex-col gap-3.5 p-[18px] rounded-2xl bg-petal-25">
-                <div className="flex justify-between gap-3 flex-wrap">
-                  <div className="flex flex-col gap-0.5">
-                    <span className="font-bold text-lg">{claim.type}</span>
-                    <span className="font-mono text-sm text-grey">
-                      {claim.id}
-                      {claim.number ? ' → ' + claim.number : ''}
-                    </span>
-                  </div>
-                  <span className="font-mono font-bold text-2xl">{money(claim.amount)}</span>
-                </div>
-                <div className="grid grid-cols-4 gap-1.5">
-                  {stages.map((label, i) => (
-                    <div key={label} className="flex flex-col gap-1.5">
-                      <span className="h-1.5 rounded-md" style={{ background: i < stage ? '#ED1D24' : '#EFD9CE' }} />
-                      <span className="font-bold text-[12px]" style={{ color: i < stage ? '#1A1A1A' : '#474954' }}>
-                        {label}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <div className="text-[15px] text-grey leading-relaxed">
-                {T('No open claims. If Nora finds damage on a call or in chat, she’ll start one with you.', 'No hay reclamos abiertos. Si Nora encuentra daños, iniciará uno con usted.')}
-              </div>
-            )}
-            <Link href="/customer/claim" className="flex items-center justify-center h-[52px] rounded-full bg-charcoal text-white no-underline font-extrabold text-base hover:bg-sf-red">
-              {!hasDraft
-                ? T('File a claim →', 'Iniciar un reclamo →')
-                : claim.status === 'draft'
-                  ? T('Continue my claim →', 'Continuar mi reclamo →')
-                  : T('View claim progress →', 'Ver el progreso →')}
-            </Link>
-            {c.claimsHistory.map((pc) => (
-              <div key={pc.id} className="flex gap-3 text-[15px] pt-3 border-t border-charcoal/12">
-                <span className="font-mono text-grey">{pc.date.slice(0, 4)}</span>
-                <span className="flex-1">{pc.type}</span>
-                <span className="font-mono">{money(pc.amount)}</span>
-              </div>
-            ))}
-          </section>
-
+          </details>
         </div>
       </div>
     </>

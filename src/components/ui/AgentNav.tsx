@@ -50,7 +50,7 @@ export function AgentNav({
             >
               {label}
               {k === 'drafts' && draftCount > 0 && (
-                <span className="min-w-[22px] h-[22px] px-1.5 rounded-full bg-neon-lavender text-void font-mono font-bold text-[12px] flex items-center justify-center">{draftCount}</span>
+                <span className="min-w-[22px] h-[22px] px-1.5 rounded-full bg-white/[.12] text-ink font-mono font-bold text-[12px] flex items-center justify-center">{draftCount}</span>
               )}
             </button>
           ))}
@@ -58,11 +58,10 @@ export function AgentNav({
         <div className="flex-1" />
         <span
           className="flex items-center gap-2 font-mono text-[12px] whitespace-nowrap"
-          style={{ color: dbStatus === 'live' ? '#6FB6DC' : '#B9A6C9' }}
+          style={{ color: '#B9A6C9' }}
           title={dbStatus === 'live' ? 'Live on SpacetimeDB maincloud' : 'SpacetimeDB unreachable · syncing across local tabs only'}
         >
-          {/* Re-keyed on every sync so the 1.5s red flash animation restarts. */}
-          <span key={lastSync} className="w-2 h-2 rounded-full inline-block bg-neon-blue" style={{ animation: lastSync ? 'hnSync 1.5s ease-out' : undefined, boxShadow: '0 0 8px #6FB6DC' }} />
+          <span data-sync={lastSync} className="w-2 h-2 rounded-full inline-block" style={{ background: dbStatus === 'live' ? '#8FC3DD' : '#6E6878' }} />
           {dbStatus === 'live' ? 'SYNC · SpacetimeDB' : dbStatus === 'connecting' ? 'SYNC · connecting…' : 'SYNC · local tabs'}
         </span>
         <label className="flex items-center gap-2 whitespace-nowrap">
@@ -78,7 +77,7 @@ export function AgentNav({
         <button onClick={onReset} className="h-[38px] px-3.5 rounded-[9px] border border-white/[.14] bg-transparent text-white font-bold text-sm cursor-pointer whitespace-nowrap">
           Reset
         </button>
-        <span title="Jordan Mills · CAT Response" className="w-[38px] h-[38px] rounded-full bg-neon-red text-white flex items-center justify-center font-display font-black text-[15px] flex-none">
+        <span title="Jordan Mills · CAT Response" className="w-[38px] h-[38px] rounded-full bg-panel-2 border border-white/[.14] text-white flex items-center justify-center font-display font-black text-[15px] flex-none">
           JM
         </span>
       </div>

@@ -6,7 +6,7 @@ import { CircleMarker, MapContainer, TileLayer, Tooltip } from 'react-leaflet';
 import type { CustomerProfile, UrgencyLevel } from '@/types/statefarm';
 import { COORDS } from '@/lib/hn';
 
-const C: Record<UrgencyLevel, string> = { High: '#FF3B47', Medium: '#C9B6DA', Low: '#6FB6DC' };
+const C: Record<UrgencyLevel, string> = { High: '#FF3B47', Medium: '#9A93A3', Low: '#4E5A66' };
 const N = 2412;
 
 /** Deterministic fake policyholder locations across DFW. */

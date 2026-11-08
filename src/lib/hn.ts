@@ -39,9 +39,10 @@ export const TIER_RANK: Record<UrgencyLevel, number> = { High: 0, Medium: 1, Low
 /** Light (policyholder) and dark (agent) colors per tier. */
 export const TIER_LIGHT: Record<UrgencyLevel, string> = { High: '#ED1D24', Medium: '#7D6F86', Low: '#286784' };
 export const TIER_DARK: Record<UrgencyLevel, { fg: string; bg: string }> = {
-  High: { fg: '#FF3B47', bg: 'rgba(255,59,71,.14)' },
-  Medium: { fg: '#C9B6DA', bg: 'rgba(185,166,201,.16)' },
-  Low: { fg: '#6FB6DC', bg: 'rgba(79,163,207,.14)' },
+  // Calm palette: only High gets color; Medium/Low are neutral.
+  High: { fg: '#FF6B73', bg: 'rgba(255,59,71,.12)' },
+  Medium: { fg: '#E6E1EA', bg: 'rgba(255,255,255,.07)' },
+  Low: { fg: '#9A93A3', bg: 'transparent' },
 };
 
 /** Extra policy facts the designs need that aren't in mockCustomers.ts. */
@@ -90,3 +91,6 @@ export function lastCustomerQuote(c: CustomerProfile) {
   const m = [...c.chatTranscript].reverse().find((x) => x.sender === 'customer');
   return m ? `“${m.text}”` : '—';
 }
+
+/** Demo number for Nora's line (fictional 555 number). */
+export const NORA_PHONE = '(800) 555-0142';
