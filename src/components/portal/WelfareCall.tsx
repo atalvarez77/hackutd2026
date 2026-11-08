@@ -144,7 +144,7 @@ function tone(k: string) {
 
 export function WelfareCall() {
   const store = useStore();
-  const { activeCustomer: c, callStatus, transcripts, claims, contactRequests, agentTakeover, demo } = store;
+  const { activeCustomer: c, callStatus, transcripts, claims, contactRequests, agentTakeover } = store;
   const es = c.language === 'es';
   const status = callStatus[c.id] || 'idle';
   const [stage, setStage] = useState<Stage>('greet');
@@ -166,7 +166,6 @@ export function WelfareCall() {
   const [texts, setTexts] = useState<{ id: number; text: string }[]>([]);
   const [banner, setBanner] = useState<number | null>(null);
   const [msgOpen, setMsgOpen] = useState(false);
-  const demoDone = useRef<Set<string>>(new Set());
 
   const claim = claims[c.id];
   const req = contactRequests.find((r) => r.custId === c.id && r.status !== 'closed');
@@ -252,7 +251,6 @@ export function WelfareCall() {
     setDigits('');
     setKeypad(false);
     setConf(false);
-    demoDone.current = new Set();
     store.setCallStatus(c.id, 'ai');
     store.appendLine(c.id, { kind: 'event', text: 'Welfare call connected · Nora on the line', dot: 'red' });
     setStage('greet');
@@ -449,35 +447,6 @@ export function WelfareCall() {
     rec.start();
   };
 
-  /* ---- Guided demo: answer the call and play Sofia's side by itself ---- */
-  const ringingNow = status === 'ringing' || status === 'idle';
-  useEffect(() => {
-    if (!demo?.on) return;
-    if (ringingNow) {
-      const t = setTimeout(accept, 3000);
-      return () => clearTimeout(t);
-    }
-    if (!live || speaking) return;
-    const last = callLines[callLines.length - 1];
-    const key = takeover ? (last?.kind === 'agent' ? 'thanks:' + last.id : '') : stage + (conf ? '+c' : '');
-    if (!key || demoDone.current.has(key)) return;
-    const t = setTimeout(() => {
-      demoDone.current.add(key);
-      if (takeover) return reply(es ? CHIPS.transfer(c)[1].es : CHIPS.transfer(c)[1].en);
-      if (stage === 'safety' && !conf) return addCall();
-      if (stage === 'submitted') {
-        setKeypad(true);
-        setTimeout(() => press('1'), 1100);
-        return;
-      }
-      if (stage === 'transfer' || stage === 'closing') return;
-      const chip = CHIPS[stage](c)[0];
-      reply(es ? chip.es : chip.en);
-    }, 1800);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [demo?.on, ringingNow, live, speaking, stage, conf, takeover, callLines.length]);
-
   const T = (en: string, sp: string) => (es ? sp : en);
   const secs = startedAt && now ? Math.max(0, Math.floor((now - startedAt) / 1000)) : null;
   const clock = secs === null ? '0:00' : `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
@@ -644,7 +613,6 @@ export function WelfareCall() {
         <header className="px-5 py-4 border-b border-line flex items-center gap-3 flex-wrap">
           <span className="font-semibold text-[20px]">{T('Call transcript', 'Transcripción de la llamada')}</span>
           {conf && <span className="text-[14px] text-grey">{T(`${c.emergencyContact.name} is on the call`, `${c.emergencyContact.name} está en la llamada`)}</span>}
-          {demo?.on && <span className="ml-auto text-[13px] px-2 py-0.5 rounded-md bg-petal text-charcoal">{T('Guided demo playing', 'Demo guiada en curso')}</span>}
           <span className="flex items-center gap-2 text-[15px] text-grey">
             {live && <span className="w-2 h-2 rounded-full bg-sf-red" />}
             {!live

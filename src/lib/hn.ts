@@ -94,10 +94,3 @@ export function lastCustomerQuote(c: CustomerProfile) {
 
 /** Demo number for Nora's line (fictional 555 number). */
 export const NORA_PHONE = '(800) 555-0142';
-
-/** Powered medical equipment on file (mock). Outage mode calls these households first. */
-export const MEDICAL: Record<string, string> = {
-  'cust-3': 'Home oxygen concentrator',
-  'cust-6': 'Insulin, needs refrigeration',
-  'cust-1': 'Hearing aid · speak slowly',
-};

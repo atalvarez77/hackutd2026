@@ -10,7 +10,7 @@ import type { UrgencyLevel } from '@/types/statefarm';
 
 export default function HomePage() {
   const router = useRouter();
-  const { customers, activeCustomer, setActiveCustomerId, priorityOverride, catMode, callStatus, claims } = useStore();
+  const { customers, activeCustomer, setActiveCustomerId, priorityOverride, callStatus, claims } = useStore();
   const lang = activeCustomer.language;
   const T = makeT(lang);
 
@@ -36,15 +36,6 @@ export default function HomePage() {
 
   return (
     <>
-      {catMode.on && (
-        <div className="bg-charcoal text-white">
-          <div className="max-w-[1180px] mx-auto px-[clamp(16px,3vw,40px)] py-3 text-[16px] flex flex-wrap gap-x-2">
-            <span className="font-semibold">{T(`${catMode.name} in your area.`, `${catMode.name} en su zona.`)}</span>
-            <span className="text-white/75">{T('Nora is calling policyholders now. Keep your phone nearby.', 'Nora está llamando a los asegurados. Tenga su teléfono a la mano.')}</span>
-          </div>
-        </div>
-      )}
-
       <section className="bg-petal">
         <div className="max-w-[1180px] mx-auto px-[clamp(16px,3vw,40px)] py-[clamp(40px,6vw,80px)] grid gap-12 items-center grid-cols-1 lg:grid-cols-2">
           <div className="flex flex-col gap-5">

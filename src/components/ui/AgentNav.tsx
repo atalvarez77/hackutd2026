@@ -10,10 +10,6 @@ export function AgentNav({
   view,
   onView,
   draftCount,
-  catOn,
-  onCat,
-  demoOn,
-  onDemo,
   onHelp,
   lastSync,
   dbStatus,
@@ -25,10 +21,6 @@ export function AgentNav({
   view: AgentView;
   onView: (v: AgentView) => void;
   draftCount: number;
-  catOn: boolean;
-  onCat: () => void;
-  demoOn: boolean;
-  onDemo: () => void;
   onHelp: () => void;
   lastSync: number;
   dbStatus: DbStatus;
@@ -68,16 +60,6 @@ export function AgentNav({
         <div className="flex-1" />
         <button onClick={onHelp} title="Keyboard shortcuts (?)" className="h-[38px] w-[38px] rounded-[9px] border border-white/[.14] bg-transparent text-mist text-sm cursor-pointer">
           ?
-        </button>
-        <button onClick={onDemo} className="h-[38px] px-3.5 rounded-[9px] border border-white/[.14] bg-transparent text-white text-sm cursor-pointer whitespace-nowrap">
-          {demoOn ? 'Stop demo' : 'Run demo'}
-        </button>
-        <button
-          onClick={onCat}
-          className="h-[38px] px-3.5 rounded-[9px] font-semibold text-sm cursor-pointer whitespace-nowrap border"
-          style={catOn ? { background: 'transparent', borderColor: 'rgba(255,107,115,.5)', color: '#FF6B73' } : { background: '#ED1D24', borderColor: '#ED1D24', color: '#fff' }}
-        >
-          {catOn ? 'End catastrophe mode' : 'Activate catastrophe mode'}
         </button>
         <span
           className="flex items-center gap-2 text-[13px] whitespace-nowrap"

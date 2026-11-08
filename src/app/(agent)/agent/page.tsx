@@ -10,8 +10,7 @@ import { StreamText } from '@/components/ui/StreamText';
 import { ClaimChip } from '@/components/ui/Chips';
 import type { Line } from '@/types/statefarm';
 import { SIM, simTrace } from '@/components/agent/simScripts';
-import { first, initials, MEDICAL, money, TIER_DARK, TIER_RANK, WATER_BACKUP } from '@/lib/hn';
-import type { CatKind } from '@/context/StateFarmContext';
+import { first, initials, money, TIER_DARK, TIER_RANK, WATER_BACKUP } from '@/lib/hn';
 import type { CustomerProfile, UrgencyLevel } from '@/types/statefarm';
 
 const TriageMap = dynamic(() => import('@/components/agent/TriageMap'), { ssr: false });
@@ -34,8 +33,6 @@ export default function AgentConsolePage() {
   const [panelOpen, setPanelOpen] = useState(false);
   const [msg, setMsg] = useState('');
   const [toast, setToast] = useState<string | null>(null);
-  const [catAsk, setCatAsk] = useState(false);
-  const [catKind, setCatKind] = useState<CatKind>('storm');
   const [help, setHelp] = useState(false);
   const storeRef = useRef(store);
   storeRef.current = store;
@@ -166,59 +163,6 @@ export default function AgentConsolePage() {
     return () => window.removeEventListener('keydown', h);
   }, []);
 
-  /* ---- Guided demo: Jordan's part (accept the transfer, speak, approve) ---- */
-  const demoStep = useRef('');
-  useEffect(() => {
-    if (!store.demo.on) {
-      demoStep.current = '';
-      return;
-    }
-    const id = 'cust-1';
-    const rq = contactRequests.find((r) => r.custId === id && r.status === 'waiting');
-    const said = (transcripts[id] || []).some((l) => l.kind === 'agent');
-    const cl = claims[id];
-    let next = '';
-    let run: () => void = () => {};
-    let wait = 3000;
-    if (rq && demoStep.current === '') {
-      next = 'accept';
-      run = () => {
-        setSel(id);
-        setView('queue');
-        store.acceptContactRequest(rq.id);
-      };
-    } else if (agentTakeover[id] && !said && demoStep.current === 'accept') {
-      next = 'speak';
-      run = () =>
-        store.sendAgentMessage(
-          id,
-          customers.find((x) => x.id === id)?.language === 'es'
-            ? 'Hola Sofía, soy Jordan de State Farm. Ya tengo todo lo que habló con Nora. Voy a aprobar su reclamo y hoy le mando un plomero.'
-            : 'Hi Sofia, this is Jordan from State Farm. I have everything you told Nora. I’m approving your claim and sending a plumber today.',
-        );
-    } else if (said && cl && cl.status !== 'approved' && demoStep.current === 'speak') {
-      next = 'approve';
-      wait = 6000;
-      run = () => {
-        const num = store.approveClaimDraft(id);
-        if (num) showToast(`${num} approved and dispatched`);
-      };
-    } else if (cl?.status === 'approved' && demoStep.current === 'approve') {
-      next = 'done';
-      run = () => {
-        store.stopDemo();
-        showToast('Demo complete');
-      };
-    }
-    if (!next) return;
-    const t = setTimeout(() => {
-      demoStep.current = next;
-      run();
-    }, wait);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [store.demo.on, contactRequests, agentTakeover, transcripts, claims]);
-
   const callText = (x: CustomerProfile): [string, string, boolean] => {
     const rq = contactRequests.find((r) => r.custId === x.id && r.status === 'waiting');
     if (rq) return ['Wants a person', '#FF6B73', true];
@@ -266,15 +210,6 @@ export default function AgentConsolePage() {
           setFilter(v === 'drafts' ? 'Drafts' : 'All');
         }}
         draftCount={counts.Drafts}
-        catOn={store.catMode.on}
-        onCat={() => (store.catMode.on ? store.setCatMode(false) : setCatAsk(true))}
-        demoOn={store.demo.on}
-        onDemo={() => {
-          if (store.demo.on) return store.stopDemo();
-          window.open('/customer', 'hn-portal', 'width=1180,height=900');
-          store.startDemo();
-          showToast('Demo started · the portal opens in its own window');
-        }}
         onHelp={() => setHelp(true)}
         lastSync={store.lastSync}
         dbStatus={store.dbStatus}
@@ -289,20 +224,6 @@ export default function AgentConsolePage() {
           showToast('Demo data restored');
         }}
       />
-
-      {store.catMode.on && (
-        <div className="flex-none flex items-center gap-3 px-6 py-2.5 bg-[#2A1416] border-b border-white/[.08] text-[15px]">
-          <Dot color="#FF6B73" />
-          <span className="font-semibold">Catastrophe mode · {store.catMode.name}</span>
-          <span className="text-mist">
-            Nora is calling everyone in the zone, highest risk first · {Object.values(callStatus).filter((v) => v === 'ai').length} on calls now
-          </span>
-          <span className="flex-1" />
-          <button onClick={() => store.setCatMode(false)} className="h-8 px-3 rounded-md border border-white/[.16] bg-transparent text-ink text-[14px] cursor-pointer">
-            End
-          </button>
-        </div>
-      )}
 
       {/* Request strip */}
       {waitingReqs.length > 0 && (
@@ -349,7 +270,6 @@ export default function AgentConsolePage() {
               customers={customers}
               tierOf={tier}
               selectedId={c.id}
-              catOn={store.catMode.on}
               callLabel={(x) => callText(x)[0]}
               onSelect={(id) => {
                 setSel(id);
@@ -418,7 +338,6 @@ export default function AgentConsolePage() {
                           <div className="text-[13px] text-[#8A8494] truncate">
                             {x.age} · {x.livesAlone ? 'lives alone' : 'with family'}
                             {x.language === 'es' ? ' · Spanish' : ''}
-                            {MEDICAL[x.id] && store.catMode.kind === 'outage' ? ' · medical' : ''}
                           </div>
                         </div>
                         <div className="flex items-baseline gap-2">
@@ -723,52 +642,6 @@ export default function AgentConsolePage() {
           </aside>
         )}
       </div>
-
-      {catAsk && (
-        <div className="fixed inset-0 z-40 bg-black/60 flex items-center justify-center p-4" onClick={() => setCatAsk(false)}>
-          <div className="w-full max-w-[460px] rounded-xl bg-panel border border-white/[.1] p-6 flex flex-col gap-4" onClick={(e) => e.stopPropagation()}>
-            <div className="text-[20px] font-semibold">Declare a catastrophe event?</div>
-            <div className="grid grid-cols-2 gap-2">
-              {(
-                [
-                  ['storm', 'Winter storm', 'Calls by risk score'],
-                  ['outage', 'Power outage', 'Medical equipment first'],
-                ] as const
-              ).map(([k, label, sub]) => (
-                <button
-                  key={k}
-                  onClick={() => setCatKind(k)}
-                  className="text-left p-3 rounded-lg border bg-transparent text-ink cursor-pointer"
-                  style={{ borderColor: catKind === k ? '#F4F1F6' : 'rgba(255,255,255,.12)' }}
-                >
-                  <div className="font-semibold">{label}</div>
-                  <div className="text-[13px] text-mist">{sub}</div>
-                </button>
-              ))}
-            </div>
-            <p className="m-0 text-[15px] text-mist leading-relaxed">
-              Nora starts calling every policyholder in the zone right away
-              {catKind === 'outage' ? ', starting with households that rely on powered medical equipment' : ', highest risk first'}. Anyone who reports damage or presses 1
-              for a person comes to this queue.
-            </p>
-            <div className="flex justify-end gap-2">
-              <button onClick={() => setCatAsk(false)} className="h-10 px-4 rounded-lg border border-white/[.14] bg-transparent text-ink cursor-pointer">
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  setCatAsk(false);
-                  store.setCatMode(true, catKind);
-                  showToast('Catastrophe mode on · Nora is dialing');
-                }}
-                className="h-10 px-4 rounded-lg bg-sf-red text-white font-semibold cursor-pointer"
-              >
-                Activate
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {help && (
         <div className="fixed inset-0 z-40 bg-black/60 flex items-center justify-center p-4" onClick={() => setHelp(false)}>
