@@ -12,7 +12,7 @@ const sans = Source_Sans_3({
 
 export const metadata: Metadata = {
   title: 'HeyNeighbor · We knock first.',
-  description: 'Nora, State Farm’s AI neighbor: proactive welfare calls, risk triage and pre-filed claims during extreme weather.',
+  description: 'Nora, State Farm’s AI neighbor: proactive welfare calls, risk triage and pre-filed claims during disasters and emergencies.',
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

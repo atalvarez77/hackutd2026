@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server';
+import { FREEZE_RE, hazardFor, reportsHazard } from '@/lib/hn';
+import type { CustomerProfile } from '@/types/statefarm';
 
 /**
  * POST { customerId, message, lang, customer } → { reply, toolCalls: [{ name, args, output }] }
@@ -10,7 +12,6 @@ import { NextResponse } from 'next/server';
 
 const NIM_URL = 'https://integrate.api.nvidia.com/v1/chat/completions';
 const MODEL = process.env.NEMOTRON_MODEL || 'nvidia/llama-3.3-nemotron-super-49b-v1';
-const HAZARD_RE = /freez|froze|pipe|cold|agua|helad|congel|tuber|flood|leak|roof|branch|tree|heat|ac\b|power|luz/i;
 
 interface Body {
   customerId: string;
@@ -59,26 +60,32 @@ function outputFor(name: string, args: Record<string, unknown>, b: Body): string
 
 function simulate(b: Body) {
   const es = b.lang === 'es';
-  const hazard = HAZARD_RE.test(b.message);
+  const hazard = reportsHazard(b.message);
   if (!hazard) {
     return {
       reply: es
-        ? 'Qué bueno. Deje gotear las llaves esta noche y abra los gabinetes del fregadero. Le escribo de nuevo en la mañana.'
-        : 'Glad to hear it. Let faucets drip tonight and open the cabinets under your sinks. I’ll check in again in the morning.',
+        ? 'Qué bueno. Si algo cambia, escríbame aquí o llámenos cuando quiera. Le escribo de nuevo en la mañana.'
+        : 'Glad to hear it. If anything changes, message me here or call us any time. I’ll check in again in the morning.',
       toolCalls: [] as ToolCallOut[],
     };
   }
-  const freeze = /freez|froze|pipe|cold|agua|helad|congel|tuber/i.test(b.message);
+  const freeze = FREEZE_RE.test(b.message);
+  // Classify the report (fire, flood, tree, roof/wind, outage, heat, freeze) from what was said.
+  const kind = hazardFor({ detectedHazard: b.customer?.hazard || 'None', claimDraft: { hazardType: 'None', estimatedLoss: 2500 } } as unknown as CustomerProfile, b.message);
   const risk = Math.min(98, (b.customer?.risk ?? 85) + 10);
   const calls: ToolCallOut[] = [
-    { name: 'assess_risk_and_update_score', args: { detectedHazard: freeze ? 'Freezing Pipes Hazard' : b.customer?.hazard, newRisk: risk } },
-    { name: 'auto_file_claim', args: { claimType: freeze ? 'Water damage: frozen pipe' : 'Storm damage', estimatedLoss: 3500 } },
+    { name: 'assess_risk_and_update_score', args: { detectedHazard: kind.hazard, newRisk: risk } },
+    { name: 'auto_file_claim', args: { claimType: kind.type, estimatedLoss: kind.amount } },
     { name: 'trigger_emergency_contact', args: { contactName: b.customer?.contact } },
   ].map((c) => ({ ...c, output: outputFor(c.name, c.args, b) }));
   return {
-    reply: es
-      ? 'Parece una tubería congelada. No la descongele con fuego. Ya inicié un reclamo por daño de agua, así que no tiene que llenar formularios. Un agente lo está revisando.'
-      : 'That sounds like a frozen pipe. Please don’t thaw it with an open flame. I’ve started a water-damage claim for you, so you won’t need to fill in any forms. An agent is reviewing it now.',
+    reply: freeze
+      ? es
+        ? 'Parece una tubería congelada. No la descongele con fuego. Ya inicié un reclamo por daño de agua, así que no tiene que llenar formularios. Un agente lo está revisando.'
+        : 'That sounds like a frozen pipe. Please don’t thaw it with an open flame. I’ve started a water-damage claim for you, so you won’t need to fill in any forms. An agent is reviewing it now.'
+      : es
+        ? 'Siento mucho lo que pasó. Por favor manténgase lejos de cualquier peligro. Ya inicié un reclamo, así que no tiene que llenar formularios. Un agente lo está revisando.'
+        : 'I’m sorry that happened. Please stay away from anything unsafe. I’ve started a claim for you, so you won’t need to fill in any forms. An agent is reviewing it now.',
     toolCalls: calls,
   };
 }
@@ -86,7 +93,7 @@ function simulate(b: Body) {
 async function nemotron(b: Body, key: string) {
   const c = b.customer;
   const system = [
-    'You are Nora, State Farm’s AI welfare-check assistant during a winter storm.',
+    'You are Nora, State Farm’s AI welfare-check assistant during a disaster or emergency (storm, flood, wildfire, freeze, extreme heat, power outage, or similar). Do not assume which kind; go by the alert and what the policyholder says.',
     `Reply in ${b.lang === 'es' ? 'natural Spanish' : 'English'} in 1–3 short, warm, practical sentences. No emoji.`,
     'Never say a claim IS covered; say it "looks covered" and the adjuster confirms.',
     'If the policyholder reports damage or a hazard, call assess_risk_and_update_score, then auto_file_claim, then trigger_emergency_contact.',

@@ -10,7 +10,7 @@ import type { UrgencyLevel } from '@/types/statefarm';
 
 export default function HomePage() {
   const router = useRouter();
-  const { customers, activeCustomer, setActiveCustomerId, priorityOverride, catMode, callStatus, claims } = useStore();
+  const { customers, activeCustomer, setActiveCustomerId, priorityOverride, callStatus, claims } = useStore();
   const lang = activeCustomer.language;
   const T = makeT(lang);
 
@@ -21,7 +21,7 @@ export default function HomePage() {
     { title: T('Emergency contact', 'Contacto de emergencia'), body: T('Who we text if we can’t reach you.', 'A quién avisamos si no le localizamos.'), href: '/customer#contacts' },
   ];
   const STEPS = [
-    { title: T('We call you', 'Le llamamos'), body: T('When a storm alert hits your area, Nora calls the people most at risk first, in English or Spanish.', 'Cuando hay una alerta en su zona, Nora llama primero a quienes corren más riesgo, en inglés o español.') },
+    { title: T('We call you', 'Le llamamos'), body: T('When an emergency alert covers your area (storm, flood, wildfire, freeze, heat wave or outage), Nora calls the people most at risk first, in English or Spanish.', 'Cuando hay una alerta de emergencia en su zona (tormenta, inundación, incendio, helada, calor extremo o apagón), Nora llama primero a quienes corren más riesgo, en inglés o español.') },
     { title: T('Tell us what happened', 'Cuéntenos qué pasó'), body: T('Just talk. Nora already has your policy and address, so there’s nothing to look up.', 'Solo hable. Nora ya tiene su póliza y dirección, así que no hay nada que buscar.') },
     { title: T('Confirm, don’t fill in', 'Confirme, no llene'), body: T('She reads the details back. You say yes or correct them.', 'Ella le lee los datos. Usted dice que sí o los corrige.') },
     { title: T('Get your claim number', 'Reciba su número de reclamo'), body: T('Submitted before you hang up, and texted to you.', 'Enviado antes de colgar, y se lo mandamos por mensaje.') },
@@ -36,29 +36,20 @@ export default function HomePage() {
 
   return (
     <>
-      {catMode.on && (
-        <div className="bg-charcoal text-white">
-          <div className="max-w-[1180px] mx-auto px-[clamp(16px,3vw,40px)] py-3 text-[16px] flex flex-wrap gap-x-2">
-            <span className="font-semibold">{T(`${catMode.name} in your area.`, `${catMode.name} en su zona.`)}</span>
-            <span className="text-white/75">{T('Nora is calling policyholders now. Keep your phone nearby.', 'Nora está llamando a los asegurados. Tenga su teléfono a la mano.')}</span>
-          </div>
-        </div>
-      )}
-
       <section className="bg-petal">
         <div className="max-w-[1180px] mx-auto px-[clamp(16px,3vw,40px)] py-[clamp(40px,6vw,80px)] grid gap-12 items-center grid-cols-1 lg:grid-cols-2">
           <div className="flex flex-col gap-5">
-            <span className="text-[16px] font-semibold text-sf-red">{T('Meet Nora · storm check-in calls', 'Conozca a Nora · llamadas por tormenta')}</span>
+            <span className="text-[16px] font-semibold text-sf-red">{T('Meet Nora · emergency check-in calls', 'Conozca a Nora · llamadas en emergencias')}</span>
             <h1 className="m-0 font-bold leading-[0.98] text-[clamp(52px,6.4vw,88px)] tracking-[-0.03em]">
               {T('We knock', 'Tocamos')} <span className="text-sf-red">{T('first.', 'primero.')}</span>
             </h1>
             <div className="font-semibold leading-snug text-[clamp(22px,2.2vw,28px)] max-w-[540px]">
-              {T('Storm coming? We’ll call you before you have to call us.', '¿Viene una tormenta? Le llamamos antes de que usted tenga que llamarnos.')}
+              {T('When disaster hits, we call you before you have to call us.', 'Cuando hay un desastre, le llamamos antes de que usted tenga que llamarnos.')}
             </div>
             <p className="m-0 max-w-[520px] text-[20px] leading-relaxed text-grey">
               {T(
-                'Nora is State Farm’s AI assistant for severe weather. She checks that you’re safe and, if something’s damaged, files the claim with you on the same call.',
-                'Nora es la asistente de IA de State Farm para el mal tiempo. Confirma que usted esté bien y, si algo se dañó, hace el reclamo con usted en la misma llamada.',
+                'Nora is State Farm’s AI assistant for emergencies of any kind: storms, floods, wildfires, freezes, heat waves and outages. She checks that you’re safe and, if something’s damaged, files the claim with you on the same call.',
+                'Nora es la asistente de IA de State Farm para cualquier emergencia: tormentas, inundaciones, incendios, heladas, calor extremo y apagones. Confirma que usted esté bien y, si algo se dañó, hace el reclamo con usted en la misma llamada.',
               )}
             </p>
             <div className="flex flex-wrap gap-3 pt-1">
@@ -85,7 +76,7 @@ export default function HomePage() {
               </div>
             </div>
             <div className="rounded-xl bg-petal-25 border border-line p-4 flex flex-col gap-1">
-              <span className="text-[14px] text-grey">{T('Weather alert', 'Alerta del clima')}</span>
+              <span className="text-[14px] text-grey">{T('Active alert', 'Alerta activa')}</span>
               <span className="font-semibold text-[18px]">{tx(activeCustomer.weatherAlert.title, lang)}</span>
               <span className="text-[15px] text-grey leading-snug">{tx(activeCustomer.weatherAlert.description, lang)}</span>
             </div>

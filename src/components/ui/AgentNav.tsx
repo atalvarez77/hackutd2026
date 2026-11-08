@@ -2,7 +2,8 @@
 
 import Link from 'next/link';
 import { Logo } from '@/components/brand/Logo';
-import type { DbStatus } from '@/lib/spacetime';
+import type { DbStatus } from '@/context/StateFarmContext';
+import type { AiSource, ApiStatus } from '@/lib/backend';
 
 export type AgentView = 'queue' | 'map' | 'drafts';
 
@@ -10,10 +11,11 @@ export function AgentNav({
   view,
   onView,
   draftCount,
-  catOn,
-  onCat,
+  onHelp,
   lastSync,
   dbStatus,
+  apiStatus,
+  aiSource,
   customers,
   actingAs,
   onActingAs,
@@ -22,10 +24,11 @@ export function AgentNav({
   view: AgentView;
   onView: (v: AgentView) => void;
   draftCount: number;
-  catOn: boolean;
-  onCat: () => void;
+  onHelp: () => void;
   lastSync: number;
   dbStatus: DbStatus;
+  apiStatus: ApiStatus;
+  aiSource: AiSource | null;
   customers: { id: string; name: string }[];
   actingAs: string;
   onActingAs: (id: string) => void;
@@ -60,20 +63,24 @@ export function AgentNav({
           ))}
         </nav>
         <div className="flex-1" />
-        <button
-          onClick={onCat}
-          className="h-[38px] px-3.5 rounded-[9px] font-semibold text-sm cursor-pointer whitespace-nowrap border"
-          style={catOn ? { background: 'transparent', borderColor: 'rgba(255,107,115,.5)', color: '#FF6B73' } : { background: '#ED1D24', borderColor: '#ED1D24', color: '#fff' }}
-        >
-          {catOn ? 'End catastrophe mode' : 'Activate catastrophe mode'}
+        <button onClick={onHelp} title="Keyboard shortcuts (?)" className="h-[38px] w-[38px] rounded-[9px] border border-white/[.14] bg-transparent text-mist text-sm cursor-pointer">
+          ?
         </button>
         <span
           className="flex items-center gap-2 text-[13px] whitespace-nowrap"
           style={{ color: '#B9A6C9' }}
-          title={dbStatus === 'live' ? 'Live on SpacetimeDB maincloud' : 'SpacetimeDB unreachable · syncing across local tabs only'}
+          title={apiStatus === 'up' ? `FastAPI orchestrator running ${aiSource === 'nemotron' ? 'Nemotron' : 'its keyword stub (nemotron_service.py not found)'}` : 'FastAPI orchestrator not reachable · writing to SpacetimeDB directly'}
         >
-          <span data-sync={lastSync} className="w-2 h-2 rounded-full inline-block" style={{ background: dbStatus === 'live' ? '#8FC3DD' : '#6E6878' }} />
-          {dbStatus === 'live' ? 'Synced · SpacetimeDB' : dbStatus === 'connecting' ? 'Connecting…' : 'Synced · this browser'}
+          <span className="w-2 h-2 rounded-full inline-block" style={{ background: apiStatus === 'up' ? '#8FC3DD' : apiStatus === 'down' ? '#FF6B73' : '#6E6878' }} />
+          {apiStatus === 'up' ? `FastAPI · ${aiSource === 'nemotron' ? 'Nemotron' : 'stub'}` : apiStatus === 'down' ? 'FastAPI offline' : 'FastAPI…'}
+        </span>
+        <span
+          className="flex items-center gap-2 text-[13px] whitespace-nowrap"
+          style={{ color: '#B9A6C9' }}
+          title={dbStatus === 'connected' ? 'Live on SpacetimeDB maincloud' : 'SpacetimeDB unreachable · syncing across local tabs only'}
+        >
+          <span data-sync={lastSync} className="w-2 h-2 rounded-full inline-block" style={{ background: dbStatus === 'connected' ? '#8FC3DD' : '#6E6878' }} />
+          {dbStatus === 'connected' ? 'Synced · SpacetimeDB' : dbStatus === 'connecting' ? 'Connecting…' : 'Synced · this browser'}
         </span>
         <label className="flex items-center gap-2 whitespace-nowrap">
           <span className="text-[13px] text-mist">Portal user</span>
