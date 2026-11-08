@@ -36,6 +36,8 @@ import {
 // Import all reducer arg schemas
 import AgentApproveClaimReducer from "./agent_approve_claim_reducer";
 import CreateOrUpdateClaimReducer from "./create_or_update_claim_reducer";
+import EndCallReducer from "./end_call_reducer";
+import JoinCallByAgentReducer from "./join_call_by_agent_reducer";
 import UpdateCallTranscriptReducer from "./update_call_transcript_reducer";
 import UpdateTriageScoreReducer from "./update_triage_score_reducer";
 
@@ -113,6 +115,8 @@ const tablesSchema = __schema({
 const reducersSchema = __reducers(
   __reducerSchema("agent_approve_claim", AgentApproveClaimReducer),
   __reducerSchema("create_or_update_claim", CreateOrUpdateClaimReducer),
+  __reducerSchema("end_call", EndCallReducer),
+  __reducerSchema("join_call_by_agent", JoinCallByAgentReducer),
   __reducerSchema("update_call_transcript", UpdateCallTranscriptReducer),
   __reducerSchema("update_triage_score", UpdateTriageScoreReducer),
 );

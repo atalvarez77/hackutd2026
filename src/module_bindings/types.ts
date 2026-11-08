@@ -22,6 +22,7 @@ export const Claim = __t.object("Claim", {
   id: __t.u64(),
   customerId: __t.u64(),
   policyId: __t.u64(),
+  callId: __t.u64(),
   description: __t.string(),
   hazardType: __t.string(),
   estPayout: __t.f64(),
@@ -66,6 +67,7 @@ export type Policy = __Infer<typeof Policy>;
 export const TriageQueue = __t.object("TriageQueue", {
   ticketId: __t.u64(),
   customerId: __t.u64(),
+  callId: __t.u64(),
   priorityScore: __t.u32(),
   category: __t.string(),
   summaryReason: __t.string(),

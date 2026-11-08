@@ -13,6 +13,7 @@ import {
 export default {
   ticketId: __t.u64(),
   customerId: __t.u64(),
+  callId: __t.u64(),
   priorityScore: __t.u32(),
   category: __t.string(),
   summaryReason: __t.string(),

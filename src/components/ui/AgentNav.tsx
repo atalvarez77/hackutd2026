@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { Logo } from '@/components/brand/Logo';
-import type { DbStatus } from '@/lib/spacetime';
+import type { DbStatus } from '@/context/StateFarmContext';
 
 export type AgentView = 'queue' | 'map' | 'drafts';
 
@@ -64,10 +64,10 @@ export function AgentNav({
         <span
           className="flex items-center gap-2 text-[13px] whitespace-nowrap"
           style={{ color: '#B9A6C9' }}
-          title={dbStatus === 'live' ? 'Live on SpacetimeDB maincloud' : 'SpacetimeDB unreachable · syncing across local tabs only'}
+          title={dbStatus === 'connected' ? 'Live on SpacetimeDB maincloud' : 'SpacetimeDB unreachable · syncing across local tabs only'}
         >
-          <span data-sync={lastSync} className="w-2 h-2 rounded-full inline-block" style={{ background: dbStatus === 'live' ? '#8FC3DD' : '#6E6878' }} />
-          {dbStatus === 'live' ? 'Synced · SpacetimeDB' : dbStatus === 'connecting' ? 'Connecting…' : 'Synced · this browser'}
+          <span data-sync={lastSync} className="w-2 h-2 rounded-full inline-block" style={{ background: dbStatus === 'connected' ? '#8FC3DD' : '#6E6878' }} />
+          {dbStatus === 'connected' ? 'Synced · SpacetimeDB' : dbStatus === 'connecting' ? 'Connecting…' : 'Synced · this browser'}
         </span>
         <label className="flex items-center gap-2 whitespace-nowrap">
           <span className="text-[13px] text-mist">Portal user</span>
