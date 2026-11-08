@@ -10,11 +10,11 @@ Reuses the NVIDIA client and model fallback list from nemotron_service.py.
 """
 
 import json
+import os
 import re
 from typing import Any, Dict, List, Optional
 
 from nemotron_service import FALLBACK_MODELS, client
-import os
 
 
 class NoraUnavailable(Exception):
@@ -58,10 +58,12 @@ How to behave:
 - When you submit a claim, refer to the claim number as {{CLAIM_NUMBER}}; the system fills it in.
 - Don't invent facts that aren't in the profile.
 
-Return ONLY a JSON object, nothing else:
+Every answer you give, on every turn, is ONLY this JSON object and nothing else:
 {{"reply": str, "actions": [ ... ], "suggested_replies": [2-3 short things the caller might plausibly say next, in {language}]}}
 
 {actions}"""
+
+JSON_REMINDER = "(Answer with only the JSON object: reply, actions, suggested_replies.)"
 
 
 def _state_text(session: Dict[str, Any]) -> str:
@@ -80,16 +82,52 @@ def _state_text(session: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+THINK_BLOCK = re.compile(r"<think>[\s\S]*?</think>")
+LEADING_THINK = re.compile(r"^[\s\S]*?</think>")
+FENCE = re.compile(r"```(?:json)?")
+JSON_OBJECT = re.compile(r"\{[\s\S]*\}")
+REPLY_FIELD = re.compile(r'"reply"\s*:\s*"((?:[^"\\]|\\.)*)"')
+
+
+def _strip(raw: str) -> str:
+    clean = THINK_BLOCK.sub("", raw or "")
+    clean = LEADING_THINK.sub("", clean)  # reasoning block without its opening tag
+    return FENCE.sub("", clean).replace("```", "").strip()
+
+
 def _parse(raw: str) -> Dict[str, Any]:
-    clean = re.sub(r"<think>[\s\S]*?</think>", "", raw or "")
-    clean = re.sub(r"```(?:json)?", "", clean).replace("```", "").strip()
-    match = re.search(r"\{[\s\S]*\}", clean)
-    if not match:
-        raise ValueError("no JSON object in reply")
-    data = json.loads(match.group(0))
-    if not isinstance(data, dict) or not str(data.get("reply", "")).strip():
-        raise ValueError("JSON has no reply")
-    return data
+    """The JSON object Nemotron returned. If it answered in plain sentences instead, those are
+    still its own words: use them as the reply, with no actions."""
+    clean = _strip(raw)
+    match = JSON_OBJECT.search(clean)
+    if match:
+        try:
+            data = json.loads(match.group(0))
+            if isinstance(data, dict) and str(data.get("reply", "")).strip():
+                return data
+        except json.JSONDecodeError:
+            pass
+    # Truncated or invalid JSON: rescue the "reply" string if it's there.
+    m = REPLY_FIELD.search(clean)
+    if m:
+        return {"reply": json.loads(f'"{m.group(1)}"'), "actions": [], "suggested_replies": []}
+    text = clean.strip().strip('"').strip()
+    if text and not text.startswith("{") and len(text) < 800:
+        return {"reply": text, "actions": [], "suggested_replies": []}
+    raise ValueError("no usable reply")
+
+
+async def _complete(model: str, messages: List[Dict[str, str]]) -> str:
+    """Ask for JSON output; if the model/endpoint rejects response_format, ask again without it."""
+    try:
+        completion = await client.chat.completions.create(
+            model=model, messages=messages, temperature=0.3, max_tokens=900, response_format={"type": "json_object"}
+        )
+    except Exception as e:
+        if "response_format" not in str(e) and "json" not in str(e).lower():
+            raise
+        completion = await client.chat.completions.create(model=model, messages=messages, temperature=0.3, max_tokens=900)
+    return completion.choices[0].message.content or ""
 
 
 async def next_turn(session: Dict[str, Any], caller_input: str) -> Dict[str, Any]:
@@ -104,21 +142,25 @@ async def next_turn(session: Dict[str, Any], caller_input: str) -> Dict[str, Any
     lang = "Spanish" if session.get("lang") == "es" else "English"
     system = RULES.format(channel="phone call" if session.get("channel") == "call" else "text chat", language=lang, actions=ACTION_SPEC)
     messages: List[Dict[str, str]] = [
+        # Nemotron reasoning models: answer directly instead of emitting a long thinking block.
+        {"role": "system", "content": "detailed thinking off"},
         {"role": "system", "content": system},
         {"role": "system", "content": _state_text(session)},
+        # Past turns. Nora's are stored as the JSON she returned, so the model keeps that format.
         *session["history"],
-        {"role": "user", "content": caller_input},
+        {"role": "user", "content": f"{caller_input}\n\n{JSON_REMINDER}"},
     ]
 
     last_error: Optional[Exception] = None
     for model in [m for m in FALLBACK_MODELS if m]:
+        raw = ""
         try:
-            completion = await client.chat.completions.create(model=model, messages=messages, temperature=0.3, max_tokens=900)
-            data = _parse(completion.choices[0].message.content or "")
+            raw = await _complete(model, messages)
+            data = _parse(raw)
             actions = [a for a in (data.get("actions") or []) if isinstance(a, dict) and a.get("type")]
-            suggestions = [str(s) for s in (data.get("suggested_replies") or []) if str(s).strip()][:3]
+            suggestions = [str(x) for x in (data.get("suggested_replies") or []) if str(x).strip()][:3]
             return {"reply": str(data["reply"]).strip(), "actions": actions, "suggested_replies": suggestions}
         except Exception as e:  # try the next model
             last_error = e
-            print(f"[Nora] {model} failed: {e}")
+            print(f"[Nora] {model} failed: {e}" + (f" | raw output: {raw[:300]!r}" if raw else ""))
     raise NoraUnavailable(f"no model produced a reply ({last_error})")

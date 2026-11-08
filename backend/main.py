@@ -12,6 +12,7 @@ Needs NVIDIA_API_KEY (in backend/.env) for Nora to talk; without it /api/health 
 """
 
 import asyncio
+import json
 import os
 import random
 import time
@@ -126,7 +127,7 @@ def unavailable(reason: str) -> JSONResponse:
     return JSONResponse(status_code=503, content={"error": "nora_unavailable", "detail": reason})
 
 
-async def run_turn(req: TurnRequest, caller_input: str, history_text: Optional[str], force: List[dict]) -> dict:
+async def run_turn(req: TurnRequest, caller_input: str, history_text: Optional[str], force: List[dict], opening: bool = False) -> dict:
     """One Nemotron turn: decide, carry out actions, write to the database, return what the phone needs."""
     async with httpx.AsyncClient() as client:
         call_id, ticket_id, claim_id, policy_id = await resolve_ids(client, req.customer_id, req.call_id)
@@ -169,7 +170,10 @@ async def run_turn(req: TurnRequest, caller_input: str, history_text: Optional[s
         elif kind == "set_language" and a.get("language") in ("en", "es"):
             s["lang"] = a["language"]
             out_actions.append(a)
-        elif kind in ("notify_emergency_contact", "text_caller", "end_call"):
+        elif kind == "end_call" and not opening:
+            # Never hang up on the greeting.
+            out_actions.append(a)
+        elif kind in ("notify_emergency_contact", "text_caller"):
             out_actions.append(a)
 
     # The claim number exists only once submitted; Nemotron refers to it as {CLAIM_NUMBER}.
@@ -181,7 +185,8 @@ async def run_turn(req: TurnRequest, caller_input: str, history_text: Optional[s
 
     # Memory + transcript.
     s["history"].append({"role": "user", "content": caller_input})
-    s["history"].append({"role": "assistant", "content": reply})
+    # Stored in the same JSON shape Nemotron must answer in, so later turns keep the format.
+    s["history"].append({"role": "assistant", "content": json.dumps({"reply": reply, "actions": out_actions, "suggested_replies": decided["suggested_replies"]}, ensure_ascii=False)})
     s["last_reply"] = reply
     chunk = (f"Customer: {history_text}\n" if history_text else "") + f"AI: {reply}"
     async with httpx.AsyncClient() as client:
@@ -221,7 +226,7 @@ async def call_start(req: TurnRequest):
         else "[The policyholder opened a text chat with you. Greet them.]"
     )
     try:
-        return await run_turn(req, opener, None, [])
+        return await run_turn(req, opener, None, [], opening=True)
     except NoraUnavailable as e:
         return unavailable(str(e))
 
