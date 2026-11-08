@@ -2,123 +2,17 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from '@/context/StateFarmContext';
-import { NORA_PHONE, coverageVerdict, first, FREEZE_RE, hazardFor, isWaterHazard, reportsHazard, money, NO_RE, OK_RE, PERSON_RE, YES_RE } from '@/lib/hn';
-import type { CustomerProfile, Language } from '@/types/statefarm';
-import { tx } from '@/lib/i18n';
+import { NORA_PHONE, first } from '@/lib/hn';
+import type { Language } from '@/types/statefarm';
+import type { TurnFailure, TurnResult } from '@/lib/backend';
 import { pickVoice, warmVoices, type Speaker } from '@/lib/voice';
 
 /**
- * The welfare call is the policyholder's whole experience: a normal cell-phone call. It goes
- * from "hello" to a submitted claim (or a transfer to a person) without leaving the call.
- * Left: a stock iPhone call screen (keypad works: 1 = person, 2 = repeat, 3 = Spanish/English).
- * Right: the live transcript, plus demo controls standing in for the caller's voice.
+ * The phone. Nora's side of the call comes entirely from the FastAPI orchestrator (Nemotron):
+ * this component sends what the caller says, types or presses, plays back the reply, and shows
+ * what Nora did (texts, transfer, hang-up). There is no script here: no lines, no steps, no
+ * decisions about where the conversation goes.
  */
-
-type Stage = 'greet' | 'details' | 'fix' | 'safety' | 'photos' | 'coverage' | 'submitted' | 'closing' | 'transfer';
-
-const ON_CALL = 'Confirmed on call';
-
-const HAZARD_REPLY: Record<string, [string, string]> = {
-  'cust-1': ['The pipe under my sink is frozen', 'La tubería bajo el fregadero está congelada'],
-  'cust-2': ['Water is backing up into my basement', 'Está entrando agua al sótano'],
-  'cust-3': ['A big branch is leaning on my roof', 'Una rama grande está sobre mi techo'],
-  'cust-4': ['The hail knocked some shingles off', 'El granizo tumbó unas tejas'],
-  'cust-5': ['My pipes froze', 'Se congelaron mis tuberías'],
-  'cust-6': ['My AC broke and it’s 94 inside', 'Se descompuso el aire y hace mucho calor'],
-};
-
-type Pair = { en: string; es: string };
-
-function lines(c: CustomerProfile, hazard: string, claimType: string) {
-  const f = first(c.name);
-  const freeze = FREEZE_RE.test(hazard + ' ' + claimType);
-  const water = isWaterHazard(hazard + ' ' + claimType);
-  const spokenEn = freeze ? 'a frozen pipe' : hazard.toLowerCase();
-  const spokenEs = freeze ? 'una tubería congelada' : tx(hazard, 'es').toLowerCase();
-  const addr = `${c.address}, ${c.city}`;
-  const contact = `${c.emergencyContact.name}`;
-  const ded = money(c.policy.deductible);
-  const { covered } = coverageVerdict(c, hazard + ' ' + claimType);
-  return {
-    greet: {
-      en: `Hi ${f}, this is Nora, State Farm’s AI assistant, calling about the ${c.weatherAlert.title.toLowerCase()} in ${c.city}. How are you and the house holding up? To reach a person at any time, press 1. To hear something again, press 2. Para español, oprima 3.`,
-      es: `Hola ${f}, le habla Nora, la asistente de IA de State Farm, por la alerta activa en ${c.city}. ¿Cómo están usted y su casa? Para hablar con una persona, oprima 1. Para repetir, oprima 2. For English, press 3.`,
-    },
-    details: {
-      en: `I’m sorry, that sounds like ${spokenEn}. I’ve started a claim for you using what State Farm already has, so there are no forms. Let me check a few details. It started around 6 this morning at ${addr}. Is that right?`,
-      es: `Lo siento, parece ${spokenEs}. Ya inicié un reclamo con la información que State Farm ya tiene, así que no hay formularios. Déjeme confirmar unos datos. Empezó como a las 6 de la mañana en ${addr}. ¿Es correcto?`,
-    },
-    fix: {
-      en: 'No problem. Tell me what’s different and I’ll note it for your adjuster.',
-      es: 'No hay problema. Dígame qué es diferente y lo anoto para su ajustador.',
-    },
-    safety: {
-      en: `Thank you, that’s confirmed. Is everyone safe? ${water ? 'If you can, turn off the water at the main shutoff. It’s usually in the garage or near the street.' : 'Please stay away from the damaged area.'} I’m also texting ${contact} so they know what’s happening.`,
-      es: `Gracias, quedó confirmado. ¿Todos están bien? ${water ? 'Si puede, cierre la llave principal del agua. Suele estar en el garaje o cerca de la calle.' : 'Por favor manténgase lejos del área dañada.'} También le estoy mandando un mensaje a ${contact} para que sepa lo que pasa.`,
-    },
-    shutHelp: {
-      en: 'Here’s how: find the round valve where the water line comes into the house and turn it clockwise until it stops. I’ll text you the steps too. ',
-      es: 'Así se hace: busque la válvula redonda donde entra el agua a la casa y gírela a la derecha hasta que se detenga. También le mando los pasos por mensaje. ',
-    },
-    photos: {
-      en: 'Good, I’ve noted that everyone is safe. Photos help but aren’t required. You can add them later, or the adjuster will take them at the inspection.',
-      es: 'Bien, anoté que todos están a salvo. Las fotos ayudan pero no son obligatorias. Puede subirlas después, o el ajustador las tomará en la inspección.',
-    },
-    coverage: covered
-      ? {
-          en: `I checked your ${c.policy.type} policy. This looks covered, and your deductible is ${ded}. I don’t make the final call; your adjuster confirms it. Would you like me to submit the claim now?`,
-          es: `Revisé su póliza (${tx(c.policy.type, 'es')}). Esto parece estar cubierto y su deducible es de ${ded}. Yo no tomo la decisión final; su ajustador la confirma. ¿Quiere que envíe el reclamo ahora?`,
-        }
-      : {
-          en: `I checked your ${c.policy.type} policy. This may not be covered because there’s no water backup endorsement, but an agent will review it with you. Would you like me to submit it now so they can take a look?`,
-          es: `Revisé su póliza (${tx(c.policy.type, 'es')}). Puede que no esté cubierto porque no tiene endoso de respaldo de agua, pero un agente lo revisará con usted. ¿Quiere que lo envíe para que lo revisen?`,
-        },
-    submitted: (num: string) => ({
-      en: `Done. Your claim number is ${num}. An adjuster will be assigned within 24 hours, and you’ll get a text at each step. Is there anything else?`,
-      es: `Listo. Su número de reclamo es ${num}. Le asignarán un ajustador en 24 horas y recibirá un mensaje en cada paso. ¿Algo más?`,
-    }),
-    draftSaved: {
-      en: 'Okay, I saved it as a draft. You can submit it any time. Anything else?',
-      es: 'Está bien, lo guardé como borrador. Puede enviarlo cuando quiera. ¿Algo más?',
-    },
-    ok: freeze
-      ? {
-          en: 'I’m glad you’re safe. Tonight, let your faucets drip and open the cabinets under your sinks. I’ll check in again at 8 AM. Is there anything else?',
-          es: 'Qué bueno que está bien. Esta noche deje gotear las llaves y abra los gabinetes del fregadero. Le llamo otra vez a las 8 AM. ¿Algo más?',
-        }
-      : {
-          en: 'I’m glad you’re safe. If anything changes, call this number back any time and press 1 for a person. I’ll check in again at 8 AM. Is there anything else?',
-          es: 'Qué bueno que está bien. Si algo cambia, llame a este número cuando quiera y oprima 1 para hablar con una persona. Le llamo otra vez a las 8 AM. ¿Algo más?',
-        },
-    transfer: {
-      en: 'Of course. I’m connecting you to Jordan, a State Farm agent. They already have everything we talked about, so you won’t have to repeat yourself. Please stay on the line.',
-      es: 'Claro. Le comunico con Jordan, un agente de State Farm. Ya tiene todo lo que hablamos, así que no tendrá que repetir nada. Por favor no cuelgue.',
-    },
-    switched: {
-      en: 'Sure, let’s continue in English.',
-      es: 'Claro, seguimos en español.',
-    },
-    bye: {
-      en: 'Thanks for talking with me. Stay safe, and I’ll check in again at 8 AM. Goodbye.',
-      es: 'Gracias por hablar conmigo. Cuídese y le llamo otra vez a las 8 AM. Hasta luego.',
-    },
-  };
-}
-
-const CHIPS: Record<Stage, (c: CustomerProfile) => Pair[]> = {
-  greet: (c) => [
-    { en: HAZARD_REPLY[c.id]?.[0] ?? 'Something’s wrong at the house', es: HAZARD_REPLY[c.id]?.[1] ?? 'Hay un problema en la casa' },
-    { en: 'I’m okay', es: 'Estoy bien' },
-  ],
-  details: () => [{ en: 'Yes, that’s right', es: 'Sí, es correcto' }, { en: 'No, something’s different', es: 'No, algo es diferente' }],
-  fix: () => [{ en: 'It started around 3 AM', es: 'Empezó como a las 3 AM' }, { en: 'It’s in the bathroom, not the kitchen', es: 'Es en el baño, no en la cocina' }],
-  safety: () => [{ en: 'Everyone’s safe', es: 'Todos estamos bien' }, { en: 'I need help shutting it off', es: 'Necesito ayuda para cerrarla' }],
-  photos: () => [{ en: 'Skip photos for now', es: 'Sin fotos por ahora' }, { en: 'I’ll add them later', es: 'Las subo después' }],
-  coverage: () => [{ en: 'Yes, submit it', es: 'Sí, envíelo' }, { en: 'Not yet', es: 'Todavía no' }],
-  submitted: () => [{ en: 'That’s all, thanks', es: 'Es todo, gracias' }],
-  closing: () => [{ en: 'That’s all, thanks', es: 'Es todo, gracias' }],
-  transfer: () => [{ en: 'Okay, I’ll wait', es: 'Está bien, espero' }, { en: 'Thank you', es: 'Gracias' }],
-};
 
 // Minimal typing for the Web Speech API (not in lib.dom for all TS versions).
 type Recognition = { lang: string; interimResults: boolean; start: () => void; stop: () => void; onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null; onend: (() => void) | null; onerror: (() => void) | null };
@@ -131,6 +25,8 @@ const DTMF: Record<string, [number, number]> = {
 let audio: AudioContext | null = null;
 /** Wall-clock read for event handlers (kept outside the component body). */
 const clockNow = () => Date.now();
+/** Unique id for a text message. */
+const msgId = () => Date.now() + Math.random();
 function tone(k: string) {
   try {
     audio ||= new AudioContext();
@@ -149,14 +45,11 @@ function tone(k: string) {
 
 export function WelfareCall() {
   const store = useStore();
-  const { activeCustomer: c, callStatus, transcripts, claims, contactRequests, agentTakeover } = store;
+  const { activeCustomer: c, callStatus, transcripts, contactRequests, agentTakeover } = store;
   const es = c.language === 'es';
   const status = callStatus[c.id] || 'idle';
-  const [stage, setStage] = useState<Stage>('greet');
   const [speaking, setSpeaking] = useState(false);
-  /** Waiting on the FastAPI orchestrator for this turn. */
   const [thinking, setThinking] = useState(false);
-  const busy = useRef(false);
   const [voice, setVoice] = useState(true);
   const [muted, setMuted] = useState(false);
   const [listening, setListening] = useState(false);
@@ -165,21 +58,24 @@ export function WelfareCall() {
   const [digits, setDigits] = useState('');
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [now, setNow] = useState(0);
-  const recRef = useRef<Recognition | null>(null);
-  const endAfterSpeak = useRef(false);
-  const spokenAgent = useRef<Set<string>>(new Set());
-  const lastSaid = useRef<Pair | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
   const [conf, setConf] = useState(false);
   const [texts, setTexts] = useState<{ id: number; text: string }[]>([]);
   const [banner, setBanner] = useState<number | null>(null);
   const [msgOpen, setMsgOpen] = useState(false);
+  /** Nemotron's guesses at what the caller might say next (demo shortcuts only). */
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  /** Shown when Nora couldn't answer (orchestrator down or Nemotron unavailable). */
+  const [notice, setNotice] = useState<string | null>(null);
+  const recRef = useRef<Recognition | null>(null);
+  const busy = useRef(false);
+  const spokenAgent = useRef<Set<string>>(new Set());
+  const scrollRef = useRef<HTMLDivElement>(null);
 
-  const claim = claims[c.id];
   const req = contactRequests.find((r) => r.custId === c.id && r.status !== 'closed');
   const takeover = !!agentTakeover[c.id];
   const live = status === 'ai' || status === 'agent';
   const callLines = (transcripts[c.id] || []).filter((l) => l.channel === 'call' && (l.kind === 'ai' || l.kind === 'cust' || l.kind === 'agent'));
+  const T = (en: string, sp: string) => (es ? sp : en);
 
   useEffect(() => {
     warmVoices();
@@ -194,6 +90,13 @@ export function WelfareCall() {
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
   }, [callLines.length]);
+
+  // Call timer (ticks only while connected).
+  useEffect(() => {
+    if (!live) return;
+    const iv = setInterval(() => setNow(clockNow()), 1000);
+    return () => clearInterval(iv);
+  }, [live]);
 
   const speak = (text: string, lang: Language, after?: () => void, who: Speaker = 'nora') => {
     setSpeaking(true);
@@ -212,7 +115,7 @@ export function WelfareCall() {
         if (v) u.voice = v;
         u.rate = who === 'nora' ? 1 : 0.97;
         u.pitch = who === 'nora' ? 1.08 : 0.9;
-        u.onend = () => setTimeout(done, 500);
+        u.onend = () => setTimeout(done, 400);
         u.onerror = () => done();
         speechSynthesis.speak(u);
         // Safety net: some browsers never fire onend.
@@ -222,20 +125,6 @@ export function WelfareCall() {
     }
     setTimeout(done, Math.min(6000, 900 + text.length * 35));
   };
-
-  /** Nora says a line: transcript (with English translation for Spanish lines) + voice. */
-  const say = (p: Pair, after?: () => void, lang: Language = c.language, synced = false) => {
-    lastSaid.current = p;
-    store.appendLine(c.id, { kind: 'ai', channel: 'call', text: lang === 'es' ? p.es : p.en, tr: lang === 'es' && p.en !== p.es ? p.en : undefined }, { synced });
-    speak(lang === 'es' ? p.es : p.en, lang, after);
-  };
-
-  // Call timer (ticks only while connected).
-  useEffect(() => {
-    if (!live) return;
-    const iv = setInterval(() => setNow(clockNow()), 1000);
-    return () => clearInterval(iv);
-  }, [live]);
 
   // Speak the agent's lines out loud (male voice) once they've taken over the call.
   useEffect(() => {
@@ -248,21 +137,12 @@ export function WelfareCall() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [callLines.length, live]);
 
-  const accept = () => {
-    try {
-      speechSynthesis.cancel();
-    } catch {}
-    callLines.forEach((l) => l.kind === 'agent' && spokenAgent.current.add(l.id));
-    const t = clockNow();
-    setStartedAt(t);
-    setNow(t);
-    setDigits('');
-    setKeypad(false);
-    setConf(false);
-    store.setCallStatus(c.id, 'ai');
-    store.appendLine(c.id, { kind: 'event', text: 'Welfare call connected · Nora on the line', dot: 'red' });
-    setStage('greet');
-    say(lines(c, c.detectedHazard, claim?.type || '').greet);
+  /** A text message from Nora: iPhone notification + kept in Messages. */
+  const sms = (body: string) => {
+    const id = msgId();
+    setTexts((t) => [...t, { id, text: body }]);
+    setBanner(id);
+    setTimeout(() => setBanner((b) => (b === id ? null : b)), 7000);
   };
 
   const end = (note = 'Call ended by policyholder') => {
@@ -272,177 +152,81 @@ export function WelfareCall() {
     recRef.current?.stop();
     setSpeaking(false);
     setKeypad(false);
+    setSuggestions([]);
     store.setCallStatus(c.id, 'ended');
     store.appendLine(c.id, { kind: 'event', text: note, dot: 'lavender' });
   };
 
-  const confirm = (keys: string[], source = ON_CALL) => keys.forEach((k) => store.confirmClaimField(c.id, k, source));
-
-  /** Nora texts the policyholder (shows as an iPhone notification, kept in Messages). */
-  const sms = (p: Pair, lang: Language = c.language) => {
-    const body = lang === 'es' ? p.es : p.en;
-    const id = clockNow();
-    setTexts((t) => [...t, { id, text: body }]);
-    setBanner(id);
-    setTimeout(() => setBanner((b) => (b === id ? null : b)), 7000);
-    store.appendLine(c.id, { kind: 'event', text: `SMS to policyholder: “${p.en}”`, dot: 'blue' });
+  /** Play whatever Nora decided: her words, her texts, and hanging up if she ended the call. */
+  const play = (r: TurnResult | TurnFailure) => {
+    if ('error' in r) {
+      setNotice(
+        r.error === 'offline'
+          ? T('Nora is offline. Start the FastAPI backend (port 8000) and try again.', 'Nora no está disponible. Inicie el backend de FastAPI (puerto 8000).')
+          : T(`Nora can’t answer right now: ${r.detail || 'Nemotron is unavailable'}.`, `Nora no puede responder: ${r.detail || 'Nemotron no está disponible'}.`),
+      );
+      return;
+    }
+    setNotice(null);
+    setSuggestions(r.suggested_replies || []);
+    for (const a of r.actions) {
+      if (a.type === 'text_caller' && a.text) sms(a.text);
+    }
+    const ending = r.actions.some((a) => a.type === 'end_call');
+    const lang = r.language || c.language;
+    if (r.reply) speak(r.reply, lang, ending ? () => end('Call ended by Nora') : undefined);
+    else if (ending) end('Call ended by Nora');
   };
 
-  /** "add call": conference in the emergency contact so they hear it too. */
+  /** Run one exchange with the orchestrator, one at a time. */
+  const exchange = async (fn: () => Promise<TurnResult | TurnFailure>) => {
+    if (busy.current) return;
+    busy.current = true;
+    setThinking(true);
+    try {
+      speechSynthesis.cancel();
+    } catch {}
+    const r = await fn();
+    busy.current = false;
+    setThinking(false);
+    play(r);
+  };
+
+  const accept = () => {
+    callLines.forEach((l) => l.kind === 'agent' && spokenAgent.current.add(l.id));
+    const t = clockNow();
+    setStartedAt(t);
+    setNow(t);
+    setDigits('');
+    setKeypad(false);
+    setConf(false);
+    setSuggestions([]);
+    store.setCallStatus(c.id, 'ai');
+    store.appendLine(c.id, { kind: 'event', text: 'Welfare call connected · Nora on the line', dot: 'red' });
+    void exchange(() => store.startCall(c.id, 'call'));
+  };
+
+  /** Something the caller said (voice, a suggestion, or typed). */
+  const say = (text: string) => {
+    if (!text.trim() || !live) return;
+    void exchange(() => store.customerTurn(c.id, { text: text.trim() }, 'call'));
+  };
+
+  /** Keypad digits go to the orchestrator as-is; it decides what they do. */
+  const press = (k: string) => {
+    tone(k);
+    setDigits((d) => (d + k).slice(-14));
+    if (!live) return;
+    void exchange(() => store.customerTurn(c.id, { dtmf: k }, 'call'));
+  };
+
+  /** "add call": conference in the emergency contact; Nora is told they joined. */
   const addCall = () => {
     if (!live || conf) return;
     const ec = c.emergencyContact;
     setConf(true);
     store.appendLine(c.id, { kind: 'event', text: `${ec.name} (${ec.relationship}) added to the call`, dot: 'blue' });
-    if (!takeover)
-      say({
-        en: `I’ve added ${first(ec.name)} to the call so they can hear this too. Hi ${first(ec.name)}, this is Nora from State Farm.`,
-        es: `Agregué a ${first(ec.name)} a la llamada para que también escuche. Hola ${first(ec.name)}, le habla Nora de State Farm.`,
-      });
-  };
-
-  const transfer = (via: string) => {
-    if (stage === 'transfer' || takeover) return;
-    const L = lines(c, c.detectedHazard, claim?.type || '');
-    say(L.transfer);
-    sms({ en: 'State Farm: Connecting you to Jordan, a State Farm agent. Stay on the line.', es: 'State Farm: Le comunicamos con Jordan, agente de State Farm. No cuelgue.' });
-    store.createContactRequest(c.id, 'call', (c.detectedHazard === 'None' ? 'General question' : c.detectedHazard) + via, true);
-    setStage('transfer');
-  };
-
-  const textSafety = () =>
-    sms(
-      isWaterHazard(c.detectedHazard + ' ' + (claim?.type || ''))
-        ? {
-            en: 'State Farm: To shut off your water, find the round main valve where the line enters the house (garage or near the street) and turn it clockwise until it stops.',
-            es: 'State Farm: Para cerrar el agua, busque la válvula principal redonda donde entra la línea a la casa (garaje o cerca de la calle) y gírela a la derecha hasta que se detenga.',
-          }
-        : { en: 'State Farm: Stay away from the damaged area. If you smell gas or see sparks, leave and call 911.', es: 'State Farm: Manténgase lejos del área dañada. Si huele a gas o ve chispas, salga y llame al 911.' },
-    );
-
-  /**
-   * One customer reply, from voice, a chip or typing. It goes through the FastAPI orchestrator
-   * first (triage, claim, transcript in SpacetimeDB); the call then moves to its next step.
-   */
-  const reply = async (text: string) => {
-    if (!text.trim() || !live || busy.current) return;
-    busy.current = true;
-    setThinking(true);
-    const atStage = stage;
-    const turn = await store.customerTurn(c.id, text, { channel: 'call', stage: atStage });
-    busy.current = false;
-    setThinking(false);
-    if (takeover) return; // Jordan is handling the call now; Nora stays quiet.
-
-    // The orchestrator decides whether this reports damage; the keyword check is the offline fallback.
-    const hazard = turn ? !!turn.claim : reportsHazard(text);
-    const hazardNow = turn?.claim ? turn.detected_hazard || c.detectedHazard : hazard ? hazardFor(c, text).hazard : c.detectedHazard;
-    const L = lines(c, hazardNow, turn?.claim?.hazard_type || claim?.type || '');
-    // With real Nemotron behind the orchestrator Nora speaks its reply; with its stub, her script.
-    // The submit step keeps the scripted line because it carries the real claim number.
-    const ai = turn?.ai_source === 'nemotron' && turn.reply && atStage !== 'coverage' ? turn : null;
-    const respond = (p: Pair, after?: () => void) => (ai ? say({ en: ai.reply, es: ai.reply }, after, c.language, ai.reply_logged) : say(p, after));
-
-    if (PERSON_RE.test(text) && atStage !== 'transfer') return transfer('');
-
-    switch (atStage) {
-      case 'greet':
-        // Reassurance ("I'm okay", "no damage") closes the check-in; any report of damage starts a claim.
-        if (!hazard && (OK_RE.test(text) || /\b(no|nada|nothing)\b/i.test(text))) {
-          store.patchCustomer(c.id, { checkInStatus: 'completed' });
-          respond(L.ok);
-          setStage('closing');
-        } else {
-          store.runHazardPlan(c.id, text, 'call', turn?.claim ? turn : null);
-          respond(L.details);
-          setStage('details');
-        }
-        break;
-      case 'details':
-        if (NO_RE.test(text) && !YES_RE.test(text)) {
-          respond(L.fix);
-          setStage('fix');
-        } else {
-          confirm(['type', 'when', 'where', 'quote']);
-          respond(L.safety);
-          setStage('safety');
-          textSafety();
-        }
-        break;
-      case 'fix':
-        store.appendLine(c.id, { kind: 'event', text: `Correction noted for adjuster: “${text}”`, dot: 'lavender' });
-        confirm(['type', 'when', 'where', 'quote'], 'Corrected on call');
-        respond(L.safety);
-        setStage('safety');
-        textSafety();
-        break;
-      case 'safety':
-        confirm(['safe', 'shut', 'heat', 'notify']);
-        respond(/help|ayuda|can.?t|no puedo/i.test(text) ? { en: L.shutHelp.en + L.photos.en, es: L.shutHelp.es + L.photos.es } : L.photos);
-        setStage('photos');
-        break;
-      case 'photos':
-        respond(L.coverage);
-        setStage('coverage');
-        break;
-      case 'coverage':
-        if (NO_RE.test(text) && !YES_RE.test(text)) {
-          respond(L.draftSaved);
-          setStage('closing');
-        } else {
-          const num = store.submitClaim(c.id);
-          respond(L.submitted(num));
-          setStage('submitted');
-          sms({
-            en: `State Farm: Claim ${num} received. An adjuster will contact you within 24 hours. Reply HELP for a person.`,
-            es: `State Farm: Recibimos su reclamo ${num}. Un ajustador le contactará en 24 horas. Responda AYUDA para hablar con una persona.`,
-          });
-        }
-        break;
-      case 'submitted':
-      case 'closing':
-        endAfterSpeak.current = true;
-        respond(L.bye, () => {
-          if (endAfterSpeak.current) {
-            endAfterSpeak.current = false;
-            end('Call completed · Nora said goodbye');
-          }
-        });
-        break;
-      case 'transfer':
-        break;
-    }
-  };
-
-  /** Keypad: 1 or 0 = a person, 2 = repeat, 3 = switch language. */
-  const press = (k: string) => {
-    tone(k);
-    setDigits((d) => (d + k).slice(-14));
-    if (!live) return;
-    if (k === '1' || k === '0') {
-      store.appendLine(c.id, { kind: 'event', text: `Policyholder pressed ${k} · asked for a person`, dot: 'red' });
-      transfer(' · pressed ' + k);
-    } else if (k === '2' && lastSaid.current && !takeover) {
-      try {
-        speechSynthesis.cancel();
-      } catch {}
-      store.appendLine(c.id, { kind: 'event', text: 'Policyholder pressed 2 · Nora repeated', dot: 'lavender' });
-      speak(es ? lastSaid.current.es : lastSaid.current.en, c.language);
-    } else if (k === '3') {
-      const next: Language = es ? 'en' : 'es';
-      try {
-        speechSynthesis.cancel();
-      } catch {}
-      store.updateCustomerLanguage(c.id, next);
-      store.appendLine(c.id, { kind: 'event', text: `Policyholder pressed 3 · language → ${next === 'es' ? 'Spanish' : 'English'}`, dot: 'lavender' });
-      if (!takeover) {
-        const L = lines(c, c.detectedHazard, claim?.type || '');
-        const again = lastSaid.current;
-        const p = again ? { en: L.switched.en + ' ' + again.en, es: L.switched.es + ' ' + again.es } : L.switched;
-        say(p, undefined, next);
-        if (again) lastSaid.current = again;
-      }
-    }
+    void exchange(() => store.customerTurn(c.id, { event: 'contact_added' }, 'call'));
   };
 
   const toggleMic = () => {
@@ -453,7 +237,7 @@ export function WelfareCall() {
     const W = window as unknown as { SpeechRecognition?: new () => Recognition; webkitSpeechRecognition?: new () => Recognition };
     const SR = W.SpeechRecognition || W.webkitSpeechRecognition;
     if (!SR) {
-      alert(es ? 'Su navegador no admite voz. Use los botones o escriba.' : 'Voice input isn’t supported in this browser. Use the reply buttons or type.');
+      alert(es ? 'Su navegador no admite voz. Escriba su respuesta.' : 'Voice input isn’t supported in this browser. Type your reply instead.');
       return;
     }
     try {
@@ -462,7 +246,7 @@ export function WelfareCall() {
     const rec = new SR();
     rec.lang = es ? 'es-MX' : 'en-US';
     rec.interimResults = false;
-    rec.onresult = (e) => reply(e.results[0][0].transcript);
+    rec.onresult = (e) => say(e.results[0][0].transcript);
     rec.onend = () => setListening(false);
     rec.onerror = () => setListening(false);
     recRef.current = rec;
@@ -470,7 +254,6 @@ export function WelfareCall() {
     rec.start();
   };
 
-  const T = (en: string, sp: string) => (es ? sp : en);
   const secs = startedAt && now ? Math.max(0, Math.floor((now - startedAt) / 1000)) : null;
   const clock = secs === null ? '0:00' : `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
   const ringing = status === 'ringing' || status === 'idle';
@@ -525,6 +308,7 @@ export function WelfareCall() {
             </div>
             <div className="flex-1 overflow-y-auto px-3 py-4 flex flex-col gap-2">
               <span className="self-center text-[12px] text-black/45">{T('Text Message · Today', 'Mensaje de texto · Hoy')}</span>
+              {texts.length === 0 && <span className="self-center text-[14px] text-black/45 mt-6">{T('No messages yet', 'Sin mensajes')}</span>}
               {texts.map((m) => (
                 <span key={m.id} className="self-start max-w-[80%] px-3.5 py-2 rounded-[18px] bg-[#E9E9EB] text-[16px] leading-snug">
                   {m.text}
@@ -644,17 +428,18 @@ export function WelfareCall() {
                 : T('Not on a call', 'Sin llamada')
               : takeover
                 ? T('With Jordan, a State Farm agent', 'Con Jordan, agente de State Farm')
-                : listening
-                  ? T('Listening…', 'Escuchando…')
-                  : speaking
-                    ? T('Nora is speaking', 'Nora está hablando')
-                    : thinking
-                      ? T('Nora is checking…', 'Nora está revisando…')
-                    : T('Your turn to talk', 'Su turno')}
+                : thinking
+                  ? T('Nora is thinking…', 'Nora está pensando…')
+                  : listening
+                    ? T('Listening…', 'Escuchando…')
+                    : speaking
+                      ? T('Nora is speaking', 'Nora está hablando')
+                      : T('Your turn to talk', 'Su turno')}
           </span>
         </header>
 
-        {req && live && (
+        {notice && <div className="px-5 py-2.5 bg-[#FDECEC] border-b border-line text-[15px] text-[#9B1C1C]">{notice}</div>}
+        {req && live && !notice && (
           <div className="px-5 py-2.5 bg-petal-50 border-b border-line text-[15px]">
             {takeover || req.status === 'accepted'
               ? T('Jordan has joined the call.', 'Jordan se unió a la llamada.')
@@ -676,7 +461,8 @@ export function WelfareCall() {
             return (
               <div key={l.id} className={`flex flex-col gap-1 max-w-[88%] hn-in ${me ? 'self-end items-end' : 'self-start'}`}>
                 <span className="text-[13px] text-grey">
-                  {l.kind === 'ai' ? T('Nora (AI assistant)', 'Nora (asistente de IA)') : l.kind === 'agent' ? T('Jordan, State Farm agent', 'Jordan, agente de State Farm') : T('You', 'Usted')} · {l.time}
+                  {l.kind === 'ai' ? T('Nora (AI assistant)', 'Nora (asistente de IA)') : l.kind === 'agent' ? T('Jordan, State Farm agent', 'Jordan, agente de State Farm') : T('You', 'Usted')}
+                  {l.time ? ` · ${l.time}` : ''}
                 </span>
                 <span className={`px-3.5 py-2.5 rounded-2xl text-[16px] leading-snug ${me ? 'bg-charcoal text-white' : 'bg-petal-50'}`}>{l.text}</span>
               </div>
@@ -687,24 +473,26 @@ export function WelfareCall() {
         <footer className="border-t border-line px-5 py-4 flex flex-col gap-3 bg-petal-25">
           {live ? (
             <>
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-[14px] text-grey mr-1">{T(`Demo · answer as ${first(c.name)}:`, `Demo · responda como ${first(c.name)}:`)}</span>
-                {CHIPS[stage](c).map((p) => (
-                  <button
-                    key={p.en}
-                    onClick={() => reply(es ? p.es : p.en)}
-                    disabled={(speaking && !takeover) || thinking}
-                    className="h-9 px-3.5 rounded-full border border-charcoal/30 bg-white text-[15px] cursor-pointer hover:border-charcoal disabled:opacity-40"
-                  >
-                    {es ? p.es : p.en}
-                  </button>
-                ))}
-              </div>
+              {suggestions.length > 0 && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[14px] text-grey mr-1">{T('Demo · Nemotron suggests:', 'Demo · Nemotron sugiere:')}</span>
+                  {suggestions.map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => say(s)}
+                      disabled={speaking || thinking}
+                      className="h-9 px-3.5 rounded-full border border-charcoal/30 bg-white text-[15px] cursor-pointer hover:border-charcoal disabled:opacity-40"
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              )}
               <form
                 className="flex gap-2"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  reply(typed);
+                  say(typed);
                   setTyped('');
                 }}
               >
@@ -724,7 +512,7 @@ export function WelfareCall() {
                 />
               </form>
               <span className="text-[13px] text-grey">
-                {T('On the phone keypad: 1 for a person · 2 to repeat · 3 para español', 'En el teclado: 1 para una persona · 2 para repetir · 3 for English')}
+                {T('Keypad: 1 for a person · 2 to repeat · 3 para español', 'Teclado: 1 para una persona · 2 para repetir · 3 for English')}
               </span>
             </>
           ) : (

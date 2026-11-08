@@ -8,11 +8,14 @@ import { money } from '@/lib/hn';
 import { tx } from '@/lib/i18n';
 
 export function NoraChat() {
-  const { activeCustomer: c, transcripts, claims, sendChatMessage, createContactRequest, appendLine } = useStore();
+  const { activeCustomer: c, transcripts, claims, sendChatMessage } = useStore();
   const es = c.language === 'es';
   const T = (en: string, sp: string) => (es ? sp : en);
   const [input, setInput] = useState('');
   const [pending, setPending] = useState(false);
+  /** Nemotron's guesses at what the policyholder might write next. */
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [notice, setNotice] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const lines = (transcripts[c.id] || []).filter((l) => l.channel === 'chat' && (l.kind === 'ai' || l.kind === 'cust' || l.kind === 'agent' || l.kind === 'claim'));
   const claim = claims[c.id];
@@ -21,27 +24,20 @@ export function NoraChat() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [lines.length, pending]);
 
+  // Every message goes to the FastAPI orchestrator; Nemotron writes Nora's reply and decides what to do.
   const send = async (text: string) => {
     if (!text.trim() || pending) return;
     setInput('');
     setPending(true);
-    const r = await sendChatMessage(text);
+    const r = await sendChatMessage(text.trim());
     setPending(false);
-    if (r === 'person') {
-      // No separate "talk to a person" screen: a person simply calls them back.
-      createContactRequest(c.id, 'call', 'Callback requested from chat');
-      appendLine(c.id, {
-        kind: 'ai',
-        channel: 'chat',
-        text: es
-          ? `Claro. Un agente de State Farm le llamará al ${c.phone} en unos minutos. Ya sabe lo que hemos hablado.`
-          : `Of course. A State Farm agent will call you at ${c.phone} in a few minutes. They’ll already know what we talked about.`,
-        tr: es ? `Of course. A State Farm agent will call you at ${c.phone} in a few minutes.` : undefined,
-      });
+    if ('error' in r) {
+      setNotice(r.error === 'offline' ? T('Nora is offline. Start the FastAPI backend.', 'Nora no está disponible. Inicie el backend de FastAPI.') : T('Nora can’t answer right now.', 'Nora no puede responder ahora.'));
+      return;
     }
+    setNotice(null);
+    setSuggestions(r.suggested_replies || []);
   };
-
-  const quick = es ? ['Se congeló la tubería', 'Estoy bien', 'Necesito una persona'] : ['My pipes froze', 'I’m okay', 'I need a person'];
 
   return (
     <section className="border border-line rounded-2xl overflow-hidden flex flex-col min-h-[440px]">
@@ -89,8 +85,9 @@ export function NoraChat() {
         {pending && <div className="self-start text-sm text-grey italic">{T('Nora is typing…', 'Nora está escribiendo…')}</div>}
       </div>
 
+      {notice && <div className="px-[22px] pt-3 text-sm text-[#9B1C1C]">{notice}</div>}
       <div className="px-[22px] pt-3 flex gap-2 flex-wrap">
-        {quick.map((q) => (
+        {suggestions.map((q) => (
           <button key={q} onClick={() => send(q)} className="h-10 px-3.5 rounded-full border border-line bg-white font-bold text-sm cursor-pointer hover:bg-charcoal hover:text-white">
             {q}
           </button>

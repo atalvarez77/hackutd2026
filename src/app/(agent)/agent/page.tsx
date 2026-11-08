@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useStore } from '@/context/StateFarmContext';
 import { AgentNav, type AgentView } from '@/components/ui/AgentNav';
@@ -9,7 +9,6 @@ import { RiskFactor } from '@/components/ui/RiskFactor';
 import { StreamText } from '@/components/ui/StreamText';
 import { ClaimChip } from '@/components/ui/Chips';
 import type { Line } from '@/types/statefarm';
-import { SIM, simTrace } from '@/components/agent/simScripts';
 import { first, initials, money, TIER_DARK, TIER_RANK, WATER_BACKUP } from '@/lib/hn';
 import type { CustomerProfile, UrgencyLevel } from '@/types/statefarm';
 
@@ -34,11 +33,11 @@ export default function AgentConsolePage() {
   const [msg, setMsg] = useState('');
   const [toast, setToast] = useState<string | null>(null);
   const [help, setHelp] = useState(false);
-  const storeRef = useRef(store);
-  storeRef.current = store;
-
+  // Once saved state loads, start on whoever the portal is showing.
   useEffect(() => {
-    if (hydrated) setSel(storeRef.current.activeCustomerId);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (hydrated) setSel(activeCustomerId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydrated]);
 
   const tier = (c: CustomerProfile): UrgencyLevel => priorityOverride[c.id] || c.urgency;
@@ -50,39 +49,6 @@ export default function AgentConsolePage() {
   const isDraft = (id: string) => claims[id]?.status === 'draft' || claims[id]?.status === 'submitted';
   const vis = sorted.filter((c) => (filter === 'All' ? true : filter === 'High' ? tier(c) === 'High' : isDraft(c.id)));
 
-  /* ---- Simulated background Nora calls (catch up if the tab was hidden) ---- */
-  const simProgress = (id: string) => (transcripts[id] || []).filter((l) => l.channel === 'call').length;
-  useEffect(() => {
-    if (!hydrated) return;
-    let last = Date.now();
-    const iv = setInterval(() => {
-      const s = storeRef.current;
-      const steps = Math.min(3, Math.max(1, Math.floor((Date.now() - last) / 2200)));
-      last = Date.now();
-      for (const id of Object.keys(SIM)) {
-        if (s.callStatus[id] !== 'ai' || s.agentTakeover[id]) continue;
-        let p = (s.transcripts[id] || []).filter((l) => l.channel === 'call').length;
-        for (let k = 0; k < steps && p < SIM[id].steps.length; k++, p++) {
-          const st = SIM[id].steps[p];
-          s.appendLine(id, { kind: st.kind, text: st.text, dot: st.dot, channel: 'call' });
-          if (st.risk) s.patchCustomer(id, { riskScore: st.risk, urgency: 'High' });
-        }
-      }
-    }, 2200);
-    return () => clearInterval(iv);
-  }, [hydrated]);
-
-  /* ---- One scripted re-rank so the queue visibly reprioritizes (no constant jitter) ---- */
-  useEffect(() => {
-    if (!hydrated) return;
-    const t = setTimeout(() => {
-      const s = storeRef.current;
-      const c3 = s.customers.find((c) => c.id === 'cust-3');
-      if (c3 && c3.riskScore < 81) s.patchCustomer('cust-3', { riskScore: 81, urgency: 'High', detectedHazard: 'Branch cracked · over bedroom' });
-    }, 9000);
-    return () => clearTimeout(t);
-  }, [hydrated]);
-
   /* ---- Selected policyholder ---- */
   const c = customers.find((x) => x.id === sel) || customers[0];
   const claim = claims[c.id];
@@ -90,15 +56,15 @@ export default function AgentConsolePage() {
   const cs = callStatus[c.id] || 'idle';
   const live = cs === 'ai' || cs === 'agent';
   const lines = transcripts[c.id] || [];
-  const runs = toolRuns[c.id]?.length ? toolRuns[c.id] : simTrace(c.id, simProgress(c.id), takeover);
+  // What Nora actually did on this call (actions chosen by Nemotron via FastAPI).
+  const runs = toolRuns[c.id] || [];
 
-  // Only lines that arrive after the panel opens get the typing animation.
-  const seen = useRef<Record<string, Set<string>>>({});
-  if (!seen.current[c.id]) seen.current[c.id] = new Set(lines.map((l) => l.id));
+  // Only lines that arrive after a policyholder is opened get the typing animation.
+  const [seen, setSeen] = useState<{ id: string; ids: Set<string> }>(() => ({ id: c.id, ids: new Set(lines.map((l) => l.id)) }));
+  if (seen.id !== c.id) setSeen({ id: c.id, ids: new Set(lines.map((l) => l.id)) });
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
-    lines.forEach((l) => seen.current[c.id].add(l.id));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lines.length, c.id]);
 
@@ -127,7 +93,7 @@ export default function AgentConsolePage() {
 
   /* ---- Keyboard: J/K move, S step in, A approve, M map, Q queue, ? help ---- */
   const keyRef = useRef<(e: KeyboardEvent) => void>(() => {});
-  keyRef.current = (e: KeyboardEvent) => {
+  const onKey = (e: KeyboardEvent) => {
     const el = e.target as HTMLElement;
     if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT')) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -157,6 +123,10 @@ export default function AgentConsolePage() {
     } else return;
     e.preventDefault();
   };
+  // Keep the listener's handler current without re-subscribing.
+  useLayoutEffect(() => {
+    keyRef.current = onKey;
+  });
   useEffect(() => {
     const h = (e: KeyboardEvent) => keyRef.current(e);
     window.addEventListener('keydown', h);
@@ -214,7 +184,7 @@ export default function AgentConsolePage() {
         lastSync={store.lastSync}
         dbStatus={store.dbStatus}
         apiStatus={store.apiStatus}
-        aiSource={store.aiSource}
+        nemotron={store.nemotron}
         customers={customers}
         actingAs={activeCustomerId}
         onActingAs={(id) => {
@@ -409,7 +379,7 @@ export default function AgentConsolePage() {
 
           <div ref={scrollRef} className="flex-1 overflow-y-auto overflow-x-hidden px-[18px] py-4 flex flex-col gap-3">
             {lines.map((l, i) => {
-              const animate = !seen.current[c.id].has(l.id);
+              const animate = seen.id === c.id && !seen.ids.has(l.id);
               const speech = (x: Line) => x.kind === 'ai' || x.kind === 'cust' || x.kind === 'agent';
               const prevSpeech = speech(l) ? lines.slice(0, i).reverse().find(speech) : undefined;
               const divider =

@@ -8,7 +8,9 @@ load_dotenv()
 
 client = AsyncOpenAI(
     base_url=os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
-    api_key=os.getenv("NVIDIA_API_KEY")
+    # Placeholder when unset so importing this module never crashes the server; calls are
+    # skipped without a real key (conversation.nemotron_configured()).
+    api_key=os.getenv("NVIDIA_API_KEY") or "not-set",
 )
 
 FALLBACK_MODELS = [
