@@ -95,7 +95,7 @@ function ClaimFlowView() {
             <p className="m-0 max-w-[640px] text-lg leading-relaxed text-grey">
               {fromCall
                 ? T('You confirmed most of this on your call with Nora. Anything marked “Confirmed on call” is done. Check the rest and change anything that’s wrong.', 'Usted confirmó casi todo en su llamada con Nora. Lo marcado “Confirmado en la llamada” ya está listo. Revise lo demás.')
-                : T('She only filled in what State Farm already has: your policy, your address, tonight’s weather, and what you told her. Check each step and change anything that’s wrong.', 'Solo usó lo que State Farm ya tiene: su póliza, su dirección, el clima y lo que usted le dijo. Revise cada paso.')}
+                : T('She only filled in what State Farm already has: your policy, your address, the active alerts for your area, and what you told her. Check each step and change anything that’s wrong.', 'Solo usó lo que State Farm ya tiene: su póliza, su dirección, las alertas de su zona y lo que usted le dijo. Revise cada paso.')}
             </p>
           </div>
           <div className="px-5 py-4 rounded-[18px] bg-charcoal text-white flex flex-col gap-1 min-w-[220px]">

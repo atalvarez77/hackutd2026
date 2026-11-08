@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from '@/context/StateFarmContext';
-import { NORA_PHONE, coverageVerdict, first, HAZARD_RE, isWaterHazard, money, NO_RE, OK_RE, PERSON_RE, YES_RE } from '@/lib/hn';
+import { NORA_PHONE, coverageVerdict, first, FREEZE_RE, hazardFor, isWaterHazard, reportsHazard, money, NO_RE, OK_RE, PERSON_RE, YES_RE } from '@/lib/hn';
 import type { CustomerProfile, Language } from '@/types/statefarm';
 import { tx } from '@/lib/i18n';
 import { pickVoice, warmVoices, type Speaker } from '@/lib/voice';
@@ -31,7 +31,7 @@ type Pair = { en: string; es: string };
 
 function lines(c: CustomerProfile, hazard: string, claimType: string) {
   const f = first(c.name);
-  const freeze = /freez|frozen|congel/i.test(hazard + claimType);
+  const freeze = FREEZE_RE.test(hazard + ' ' + claimType);
   const water = isWaterHazard(hazard + ' ' + claimType);
   const spokenEn = freeze ? 'a frozen pipe' : hazard.toLowerCase();
   const spokenEs = freeze ? 'una tubería congelada' : tx(hazard, 'es').toLowerCase();
@@ -42,7 +42,7 @@ function lines(c: CustomerProfile, hazard: string, claimType: string) {
   return {
     greet: {
       en: `Hi ${f}, this is Nora, State Farm’s AI assistant, calling about the ${c.weatherAlert.title.toLowerCase()} in ${c.city}. How are you and the house holding up? To reach a person at any time, press 1. To hear something again, press 2. Para español, oprima 3.`,
-      es: `Hola ${f}, le habla Nora, la asistente de IA de State Farm, por la alerta del clima en ${c.city}. ¿Cómo están usted y su casa? Para hablar con una persona, oprima 1. Para repetir, oprima 2. For English, press 3.`,
+      es: `Hola ${f}, le habla Nora, la asistente de IA de State Farm, por la alerta activa en ${c.city}. ¿Cómo están usted y su casa? Para hablar con una persona, oprima 1. Para repetir, oprima 2. For English, press 3.`,
     },
     details: {
       en: `I’m sorry, that sounds like ${spokenEn}. I’ve started a claim for you using what State Farm already has, so there are no forms. Let me check a few details. It started around 6 this morning at ${addr}. Is that right?`,
@@ -81,10 +81,15 @@ function lines(c: CustomerProfile, hazard: string, claimType: string) {
       en: 'Okay, I saved it as a draft. You can submit it any time. Anything else?',
       es: 'Está bien, lo guardé como borrador. Puede enviarlo cuando quiera. ¿Algo más?',
     },
-    ok: {
-      en: 'I’m glad you’re safe. Tonight, let your faucets drip and open the cabinets under your sinks. I’ll check in again at 8 AM. Is there anything else?',
-      es: 'Qué bueno que está bien. Esta noche deje gotear las llaves y abra los gabinetes del fregadero. Le llamo otra vez a las 8 AM. ¿Algo más?',
-    },
+    ok: freeze
+      ? {
+          en: 'I’m glad you’re safe. Tonight, let your faucets drip and open the cabinets under your sinks. I’ll check in again at 8 AM. Is there anything else?',
+          es: 'Qué bueno que está bien. Esta noche deje gotear las llaves y abra los gabinetes del fregadero. Le llamo otra vez a las 8 AM. ¿Algo más?',
+        }
+      : {
+          en: 'I’m glad you’re safe. If anything changes, call this number back any time and press 1 for a person. I’ll check in again at 8 AM. Is there anything else?',
+          es: 'Qué bueno que está bien. Si algo cambia, llame a este número cuando quiera y oprima 1 para hablar con una persona. Le llamo otra vez a las 8 AM. ¿Algo más?',
+        },
     transfer: {
       en: 'Of course. I’m connecting you to Jordan, a State Farm agent. They already have everything we talked about, so you won’t have to repeat yourself. Please stay on the line.',
       es: 'Claro. Le comunico con Jordan, un agente de State Farm. Ya tiene todo lo que hablamos, así que no tendrá que repetir nada. Por favor no cuelgue.',
@@ -318,14 +323,15 @@ export function WelfareCall() {
     store.appendLine(c.id, { kind: 'cust', channel: 'call', text });
     if (takeover) return; // Jordan is handling the call now; Nora stays quiet.
 
-    const hazardNow = HAZARD_RE.test(text) ? 'Freezing Pipes Hazard' : c.detectedHazard;
+    const hazardNow = reportsHazard(text) ? hazardFor(c, text).hazard : c.detectedHazard;
     const L = lines(c, hazardNow, claim?.type || '');
 
     if (PERSON_RE.test(text) && stage !== 'transfer') return transfer('');
 
     switch (stage) {
       case 'greet':
-        if (OK_RE.test(text) && !HAZARD_RE.test(text)) {
+        // Reassurance ("I'm okay", "no damage") closes the check-in; any report of damage starts a claim.
+        if (!reportsHazard(text) && (OK_RE.test(text) || /\b(no|nada|nothing)\b/i.test(text))) {
           store.patchCustomer(c.id, { checkInStatus: 'completed' });
           say(L.ok);
           setStage('closing');

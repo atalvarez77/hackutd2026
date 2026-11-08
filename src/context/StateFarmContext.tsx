@@ -13,7 +13,7 @@ import type {
   ToolCall,
   UrgencyLevel,
 } from '@/types/statefarm';
-import { first, hazardFor, HAZARD_RE, nowTime } from '@/lib/hn';
+import { first, FREEZE_RE, hazardFor, nowTime, reportsHazard } from '@/lib/hn';
 import { claimStatusFromDb, connectSpacetime, custIdOf, tierFromScore, type DbStatus, type SpacetimeBridge } from '@/lib/spacetime';
 
 const CLAIM_RANK: Record<ClaimFlow['status'], number> = { none: 0, draft: 1, submitted: 2, approved: 3 };
@@ -465,18 +465,23 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       return 'ok';
     } catch {
       // Offline fallback: keyword detection.
-      const hz = HAZARD_RE.test(text);
+      const hz = reportsHazard(text);
+      const frz = FREEZE_RE.test(text);
       const es = c.language === 'es';
       appendLine(custId, {
         kind: 'ai',
         channel: 'chat',
         text: hz
-          ? es
-            ? 'Parece una tubería congelada. No la descongele con fuego. Ya inicié un reclamo por daño de agua; no tiene que llenar formularios.'
-            : 'That sounds like a frozen pipe. Please don’t thaw it with an open flame. I’ve started a water-damage claim for you, so you won’t need to fill in any forms.'
+          ? frz
+            ? es
+              ? 'Parece una tubería congelada. No la descongele con fuego. Ya inicié un reclamo por daño de agua; no tiene que llenar formularios.'
+              : 'That sounds like a frozen pipe. Please don’t thaw it with an open flame. I’ve started a water-damage claim for you, so you won’t need to fill in any forms.'
+            : es
+              ? 'Siento mucho lo que pasó. Por favor manténgase lejos de cualquier peligro. Ya inicié un reclamo; no tiene que llenar formularios.'
+              : 'I’m sorry that happened. Please stay away from anything unsafe. I’ve started a claim for you, so you won’t need to fill in any forms.'
           : es
-            ? 'Qué bueno. Deje gotear las llaves esta noche. Le escribo de nuevo en la mañana.'
-            : 'Glad to hear it. Let faucets drip tonight and open the cabinets under your sinks. I’ll check in again in the morning.',
+            ? 'Qué bueno. Si algo cambia, escríbame aquí o llámenos cuando quiera. Le escribo de nuevo en la mañana.'
+            : 'Glad to hear it. If anything changes, message me here or call us any time. I’ll check in again in the morning.',
       });
       if (hz) runTools(custId, hazardPlan(custId, text, 'chat'));
       return hz ? 'hazard' : 'ok';
