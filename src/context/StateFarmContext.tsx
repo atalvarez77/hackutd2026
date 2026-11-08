@@ -103,8 +103,8 @@ function mergeState(local: AppState, remote: AppState): AppState {
     ...remote,
     customers,
     activeCustomerId: pick('active', local.activeCustomerId, remote.activeCustomerId),
-    catMode: pick('cat', local.catMode, remote.catMode),
-    demo: pick('demo', local.demo, remote.demo),
+    catMode: pick('cat', local.catMode, remote.catMode) ?? local.catMode,
+    demo: pick('demo', local.demo, remote.demo) ?? local.demo,
     claims,
     contactRequests: [...reqs.values()],
     agentTakeover: { ...local.agentTakeover, ...remote.agentTakeover },
@@ -115,6 +115,15 @@ function mergeState(local: AppState, remote: AppState): AppState {
     reqSeq: Math.max(local.reqSeq, remote.reqSeq),
     stamps,
   };
+}
+
+/**
+ * Fill fields added after a snapshot was saved (or sent by a tab still running older code),
+ * so new features never read undefined.
+ */
+function withDefaults(s: AppState): AppState {
+  const d = initialState();
+  return { ...d, ...s, catMode: s.catMode ?? d.catMode, demo: s.demo ?? d.demo, stamps: s.stamps ?? {}, epoch: s.epoch ?? 0 };
 }
 
 /** Mark slots as written now. */
@@ -309,7 +318,7 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         if (parsed?.customers?.length && parsed.claims && parsed.stamps) {
           remote.current = true;
           // eslint-disable-next-line react-hooks/set-state-in-effect
-          setState(parsed);
+          setState(withDefaults(parsed));
         }
       }
     } catch {}
@@ -319,7 +328,7 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       if (!incoming?.customers?.length) return;
       remote.current = true;
       setState((s) => {
-        const merged = mergeState(s, incoming);
+        const merged = mergeState(s, withDefaults(incoming));
         try {
           localStorage.setItem(KEY, JSON.stringify(merged));
         } catch {}
@@ -691,6 +700,8 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   const value: Ctx = {
     ...state,
+    catMode: state.catMode ?? { on: false, name: CAT_NAME.storm, kind: 'storm' },
+    demo: state.demo ?? { on: false },
     hydrated,
     lastSync,
     dbStatus,
