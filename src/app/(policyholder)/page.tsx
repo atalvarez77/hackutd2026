@@ -10,15 +10,15 @@ import { first, initials, TIER_LIGHT, TIER_RANK } from '@/lib/hn';
 
 const NEEDS = [
   { k: 'damage', label: 'Report damage', sub: 'Pipes, roof, trees', href: '/customer#call', go: 'Start with Nora' },
-  { k: 'power', label: 'No power or heat', sub: 'Medical devices, cold', href: '/customer#person', go: 'Get help now' },
-  { k: 'person', label: 'Talk to a person', sub: 'Call, text or video', href: '/customer#person', go: 'Choose how to talk' },
+  { k: 'power', label: 'No power or heat', sub: 'Medical devices, cold', href: '/customer#call', go: 'Call me now' },
+  { k: 'claim', label: 'Check my claim', sub: 'Status, crew, next steps', href: '/customer#claims', go: 'View my claim' },
   { k: 'ok', label: 'I’m okay', sub: 'Let us know you’re safe', href: '/customer#call', go: 'Check in' },
 ];
 
 const TILES = [
   { n: '01', title: 'File a claim', body: 'Report storm damage. If you talked to Nora on a welfare call, she may have filed it already.', cta: 'Start', href: '/customer/claim' },
   { n: '02', title: 'Check my claim', body: 'See where your claim is, who’s been sent and when they’re due.', cta: 'View status', href: '/customer#claims' },
-  { n: '03', title: 'Talk to someone', body: 'Call, text, video or a callback from an agent who already knows your situation.', cta: 'Choose', href: '/customer#person' },
+  { n: '03', title: 'Get a check-in call', body: 'Nora calls you now in English or Spanish. Report damage and finish your claim on the call.', cta: 'Start call', href: '/customer#call' },
   { n: '04', title: 'Emergency contacts', body: 'Tell us who to notify when we can’t reach you during a storm.', cta: 'Update', href: '/customer#contacts' },
 ];
 
@@ -44,10 +44,10 @@ export default function HomePage() {
   return (
     <>
       <section className="bg-petal">
-        <div className="max-w-[1280px] mx-auto px-[clamp(16px,3vw,40px)] py-[clamp(32px,5vw,64px)] grid gap-10 items-center grid-cols-[repeat(auto-fit,minmax(min(100%,460px),1fr))]">
+        <div className="max-w-[1280px] mx-auto px-[clamp(16px,3vw,40px)] py-[clamp(32px,5vw,64px)] grid gap-10 items-stretch grid-cols-1 lg:grid-cols-2">
           <div className="flex flex-col gap-6">
             <div className="hn-label text-sm text-sf-red">Meet Nora · AI welfare checks</div>
-            <h1 className="m-0 font-display italic font-black leading-[0.86] tracking-[-0.01em] text-[clamp(76px,10vw,164px)]">
+            <h1 className="m-0 font-display italic font-black leading-[0.86] tracking-[-0.01em] text-[clamp(64px,8vw,124px)]">
               We knock <span className="text-sf-red">first.</span>
             </h1>
             <div className="font-display font-black leading-tight text-[clamp(24px,2.4vw,34px)] max-w-[560px]">
@@ -90,7 +90,7 @@ export default function HomePage() {
             </div>
           </div>
 
-          <div className="relative h-[clamp(360px,42vw,560px)]">
+          <div className="relative h-full min-h-[360px]">
             {/* Drop a licensed stock photo at public/hero.jpg (neighbor checking on an older adult in winter). */}
             <div
               className="absolute inset-0 rounded-[28px] bg-cover bg-center"
@@ -110,7 +110,7 @@ export default function HomePage() {
       </section>
 
       <section className="bg-charcoal text-white">
-        <div className="max-w-[1280px] mx-auto grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))]">
+        <div className="max-w-[1280px] mx-auto grid grid-cols-2 lg:grid-cols-4">
           {[
             { hex: '0x96c · dallas county', n: '2,412', label: 'policyholders Nora checked tonight', c: '#fff' },
             { hex: '0x0a1 · ranked', n: '9s', label: 'to rank everyone by risk', c: '#ED1D24' },
@@ -125,7 +125,7 @@ export default function HomePage() {
       </section>
 
       <section className="max-w-[1280px] w-full mx-auto px-[clamp(16px,3vw,40px)] pt-14 pb-6">
-        <div className="grid gap-4 grid-cols-[repeat(auto-fit,minmax(min(100%,240px),1fr))]">
+        <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
           {TILES.map((t) => (
             <Link
               key={t.n}
@@ -142,8 +142,8 @@ export default function HomePage() {
       </section>
 
       <section className="max-w-[1280px] w-full mx-auto px-[clamp(16px,3vw,40px)] py-14">
-        <div className="grid gap-10 items-center grid-cols-[repeat(auto-fit,minmax(min(100%,420px),1fr))]">
-          <div className="h-[420px] rounded-[28px] bg-charcoal text-white p-8 flex flex-col justify-between">
+        <div className="grid gap-10 items-stretch grid-cols-1 lg:grid-cols-2">
+          <div className="min-h-[420px] h-full rounded-[28px] bg-charcoal text-white p-8 flex flex-col justify-between">
             <div className="hn-label text-sm text-petal">Live · tonight</div>
             <div className="flex flex-col gap-3.5">
               <div className="font-display font-black leading-[0.85] text-[clamp(64px,8vw,112px)]">{customers.length}</div>
@@ -180,7 +180,7 @@ export default function HomePage() {
             </div>
             <span className="italic font-medium text-base text-grey">Pick a policyholder to open their portal as them.</span>
           </div>
-          <div className="grid gap-3.5 grid-cols-[repeat(auto-fit,minmax(min(100%,280px),1fr))]">
+          <div className="grid gap-3.5 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
             {sorted.map((c) => {
               const tier = eff(c.id, c.urgency);
               return (
@@ -217,7 +217,7 @@ export default function HomePage() {
       </section>
 
       <footer className="bg-charcoal text-petal">
-        <div className="max-w-[1280px] mx-auto px-[clamp(16px,3vw,40px)] pt-12 pb-7 grid gap-7 grid-cols-[repeat(auto-fit,minmax(180px,1fr))]">
+        <div className="max-w-[1280px] mx-auto px-[clamp(16px,3vw,40px)] pt-12 pb-7 grid gap-7 grid-cols-2 md:grid-cols-4">
           <div className="flex flex-col gap-3">
             <span className="flex items-center gap-1.5">
               <LogoMark size={30} bg="#1A1A1A" />
@@ -230,7 +230,6 @@ export default function HomePage() {
           <div className="flex flex-col gap-2.5 text-[15px]">
             <span className="hn-label text-[11px] text-[#B4A9BC]">Policyholders</span>
             <Link href="/customer" className="text-white no-underline">My Portal</Link>
-            <Link href="/customer#person" className="text-white no-underline">Talk to someone</Link>
             <Link href="/customer/claim" className="text-white no-underline">File a claim</Link>
           </div>
           <div className="flex flex-col gap-2.5 text-[15px]">
@@ -241,7 +240,7 @@ export default function HomePage() {
           <div className="flex flex-col gap-2.5 text-[15px]">
             <span className="hn-label text-[11px] text-[#B4A9BC]">Built with</span>
             <span>NVIDIA Nemotron</span>
-            <span>SpacetimeDB (planned)</span>
+            <span>SpacetimeDB</span>
             <span>Next.js 16</span>
           </div>
         </div>

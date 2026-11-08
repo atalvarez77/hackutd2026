@@ -457,11 +457,6 @@ export function WelfareCall() {
           </form>
 
           <div className="flex gap-2.5">
-            {!req && (
-              <button onClick={() => reply(T('I need a person', 'Necesito una persona'))} className="flex-1 h-[52px] rounded-full border-2 border-grey bg-transparent text-white font-bold text-base cursor-pointer">
-                {T('Talk to a person', 'Hablar con una persona')}
-              </button>
-            )}
             <button onClick={() => end()} className="flex-1 h-[52px] rounded-full bg-sf-red text-white font-bold text-base cursor-pointer">
               {T('End call', 'Colgar')}
             </button>

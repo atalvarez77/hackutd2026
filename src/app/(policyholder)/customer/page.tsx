@@ -4,7 +4,6 @@ import Link from 'next/link';
 import { useStore } from '@/context/StateFarmContext';
 import { NoraChat } from '@/components/portal/NoraChat';
 import { WelfareCall } from '@/components/portal/WelfareCall';
-import { TalkToPerson } from '@/components/portal/TalkToPerson';
 import { first, money, TIER_LIGHT } from '@/lib/hn';
 
 export default function PortalPage() {
@@ -44,15 +43,27 @@ export default function PortalPage() {
         </div>
       </section>
 
-      <div className="max-w-[1280px] w-full mx-auto px-[clamp(16px,3vw,40px)] pt-9 pb-16 grid gap-7 items-start grid-cols-[repeat(auto-fit,minmax(min(100%,420px),1fr))]">
+      <div className="max-w-[1280px] w-full mx-auto px-[clamp(16px,3vw,40px)] pt-9 pb-16 grid gap-7 items-start grid-cols-1 lg:grid-cols-2">
         {/* On phones the call comes first: it's the fastest way to get everything done. */}
-        <div className="order-2 lg:order-1">
+        <div className="order-2 lg:order-1 flex flex-col gap-7">
           <NoraChat />
+          <section id="contacts" className="rounded-3xl border-2 border-charcoal p-6 flex flex-col gap-3 scroll-mt-[110px]">
+            <span className="font-display font-black text-[28px]">{T('Emergency contacts', 'Contactos de emergencia')}</span>
+            <div className="flex items-center gap-3 py-3 border-t border-charcoal/12">
+              <span className="w-10 h-10 rounded-full bg-petal flex items-center justify-center font-display font-black text-[15px]">{c.emergencyContact.name[0]}</span>
+              <div className="flex-1 flex flex-col">
+                <span className="font-bold text-base">{c.emergencyContact.name}</span>
+                <span className="text-sm text-grey">
+                  {c.emergencyContact.relationship} · <span className="font-mono">{c.emergencyContact.phone}</span>
+                </span>
+              </div>
+              <button className="h-[38px] px-3.5 rounded-full border-2 border-charcoal/20 bg-white font-bold text-[13px] cursor-pointer">{T('Edit', 'Editar')}</button>
+            </div>
+          </section>
         </div>
 
         <div className="order-1 lg:order-2 flex flex-col gap-7">
           <WelfareCall key={c.id} />
-          <TalkToPerson />
 
           <section id="claims" className="rounded-3xl border-2 border-charcoal p-6 flex flex-col gap-4 scroll-mt-[110px]">
             <div className="flex items-baseline gap-2.5">
@@ -106,19 +117,6 @@ export default function PortalPage() {
             ))}
           </section>
 
-          <section id="contacts" className="rounded-3xl border-2 border-charcoal p-6 flex flex-col gap-3 scroll-mt-[110px]">
-            <span className="font-display font-black text-[28px]">{T('Emergency contacts', 'Contactos de emergencia')}</span>
-            <div className="flex items-center gap-3 py-3 border-t border-charcoal/12">
-              <span className="w-10 h-10 rounded-full bg-petal flex items-center justify-center font-display font-black text-[15px]">{c.emergencyContact.name[0]}</span>
-              <div className="flex-1 flex flex-col">
-                <span className="font-bold text-base">{c.emergencyContact.name}</span>
-                <span className="text-sm text-grey">
-                  {c.emergencyContact.relationship} · <span className="font-mono">{c.emergencyContact.phone}</span>
-                </span>
-              </div>
-              <button className="h-[38px] px-3.5 rounded-full border-2 border-charcoal/20 bg-white font-bold text-[13px] cursor-pointer">{T('Edit', 'Editar')}</button>
-            </div>
-          </section>
         </div>
       </div>
     </>

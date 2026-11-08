@@ -10,7 +10,6 @@ const TABS = [
   { href: '/', en: 'Home', es: 'Inicio' },
   { href: '/customer', en: 'My Portal', es: 'Mi portal' },
   { href: '/customer/claim', en: 'File a claim', es: 'Reclamo' },
-  { href: '/customer#person', en: 'Talk to a person', es: 'Hablar con alguien' },
 ];
 
 export function PolicyNav() {
