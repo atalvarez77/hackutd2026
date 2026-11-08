@@ -9,6 +9,7 @@ import { RiskFactor } from '@/components/ui/RiskFactor';
 import { StreamText } from '@/components/ui/StreamText';
 import { ClaimChip } from '@/components/ui/Chips';
 import { LIVE_FEED_ENABLED, LiveNoraFeed } from '@/components/agent/LiveNoraFeed';
+import { ClaimEditor } from '@/components/agent/ClaimEditor';
 import type { Line } from '@/types/statefarm';
 import { first, initials, money, TIER_DARK, TIER_RANK, WATER_BACKUP } from '@/lib/hn';
 import type { CustomerProfile, UrgencyLevel } from '@/types/statefarm';
@@ -19,7 +20,7 @@ const TriageMap = dynamic(() => import('@/components/agent/TriageMap'), { ssr: f
 const ROW_H = 72;
 const GRID = 'minmax(0,1.1fr) 96px minmax(0,1.1fr) 150px minmax(0,1.5fr)';
 // Events in the transcript: one accent for things that need attention, neutral otherwise.
-const DOT = { red: '#FF6B73', lavender: '#6E6878', blue: '#8FC3DD' } as const;
+const DOT = { red: '#FF6B73', lavender: '#8A8494', blue: '#8FC3DD' } as const;
 
 function Dot({ color }: { color: string }) {
   return <span className="inline-block w-2 h-2 rounded-full flex-none" style={{ background: color }} />;
@@ -33,6 +34,8 @@ export default function AgentConsolePage() {
   const [filter, setFilter] = useState<'All' | 'High' | 'Drafts'>('All');
   const [panelOpen, setPanelOpen] = useState(false);
   const [feedOpen, setFeedOpen] = useState(false);
+  /** Which policyholder's claim is open in the editor (null = none). */
+  const [editingFor, setEditingFor] = useState<string | null>(null);
   const [msg, setMsg] = useState('');
   const [toast, setToast] = useState<string | null>(null);
   const [help, setHelp] = useState(false);
@@ -155,11 +158,11 @@ export default function AgentConsolePage() {
     if (claims[x.id]?.status === 'approved') return ['Crew dispatched', '#9A93A3', false];
     if (s === 'ai') return ['Nora on call', '#F4F1F6', true];
     if (s === 'ringing') return ['Dialing…', '#9A93A3', false];
-    if (s === 'ended') return ['Call ended', '#6E6878', false];
+    if (s === 'ended') return ['Call ended', '#8A8494', false];
     if (x.checkInStatus === 'completed') return ['Checked in · OK', '#9A93A3', false];
     if (x.checkInStatus === 'urgent_attention') return ['Needs follow-up', '#F4F1F6', false];
     if (x.checkInStatus === 'in_progress') return ['SMS check-in', '#9A93A3', false];
-    return ['Not reached', '#6E6878', false];
+    return ['Not reached', '#8A8494', false];
   };
 
   const claimText = (id: string) => {
@@ -238,7 +241,7 @@ export default function AgentConsolePage() {
                     if (!acc) store.acceptContactRequest(r.id);
                   }}
                   className="h-[38px] px-3.5 rounded-full text-white font-bold text-sm cursor-pointer whitespace-nowrap"
-                  style={{ background: acc ? '#2A2A30' : '#ED1D24' }}
+                  style={{ background: acc ? '#2A2A30' : '#E61A21' }}
                 >
                   {acc ? 'Open' : 'Accept'}
                 </button>
@@ -444,9 +447,20 @@ export default function AgentConsolePage() {
                       <div className="text-[15px] text-mist">{appr ? `${claim.number} · ${money(claim.amount)} · crew dispatched` : `${money(claim.amount)} · drafted by Nora`}</div>
                     </div>
                     {!appr && (
-                      <button onClick={approve} className="h-[42px] px-3.5 rounded-lg bg-sf-red text-white font-bold text-[15px] cursor-pointer whitespace-nowrap">
-                        Approve &amp; Dispatch
-                      </button>
+                      <div className="flex flex-col gap-1.5">
+                        <button onClick={approve} className="h-[42px] px-3.5 rounded-lg bg-sf-red text-white font-bold text-[15px] cursor-pointer whitespace-nowrap">
+                          Approve &amp; Dispatch
+                        </button>
+                        <button
+                          onClick={() => {
+                            setPanelOpen(true);
+                            setEditingFor(c.id);
+                          }}
+                          className="h-[36px] px-3.5 rounded-lg border border-white/[.14] bg-transparent text-ink text-[14px] cursor-pointer whitespace-nowrap"
+                        >
+                          Edit claim
+                        </button>
+                      </div>
                     )}
                   </div>
                 );
@@ -503,6 +517,7 @@ export default function AgentConsolePage() {
                   value={msg}
                   onChange={(e) => setMsg(e.target.value)}
                   placeholder={`Speak to ${first(c.name)}…`}
+                  aria-label={`Message to ${c.name}`}
                   className="flex-1 h-12 px-3 rounded-[9px] border border-white/[.08] bg-void text-ink text-base outline-none"
                 />
                 <button type="submit" className="h-12 px-3.5 rounded-[9px] bg-ink text-panel font-semibold cursor-pointer">
@@ -596,7 +611,19 @@ export default function AgentConsolePage() {
 
             <div className="px-[18px] py-3.5 flex flex-col gap-2 border-b border-white/[.08]">
               <div className="hn-label text-[13px] text-mist">Claims</div>
-              {claim && claim.status !== 'none' && (
+              {claim && claim.status !== 'none' && editingFor === c.id && claim.status !== 'approved' && (
+                <ClaimEditor
+                  key={c.id}
+                  claim={claim}
+                  onCancel={() => setEditingFor(null)}
+                  onSave={(e) => {
+                    store.editClaim(c.id, e);
+                    setEditingFor(null);
+                    showToast('Claim updated');
+                  }}
+                />
+              )}
+              {claim && claim.status !== 'none' && !(editingFor === c.id && claim.status !== 'approved') && (
                 <div className="flex flex-col gap-2.5 p-3.5 rounded-[10px] bg-panel-2 border border-white/[.08]">
                   <div className="flex items-baseline gap-2">
                     <ClaimChip dark claim={claim} />
@@ -611,9 +638,14 @@ export default function AgentConsolePage() {
                     <div className="text-[13px] text-mist">{Object.keys(claim.confirmed).length} of 8 details confirmed by the policyholder</div>
                   )}
                   {claim.status !== 'approved' ? (
-                    <button onClick={approve} className="h-12 rounded-[10px] bg-sf-red text-white font-semibold text-base cursor-pointer">
-                      Approve claim &amp; dispatch
-                    </button>
+                    <div className="flex flex-col gap-2">
+                      <button onClick={approve} className="h-12 rounded-[10px] bg-sf-red text-white font-semibold text-base cursor-pointer">
+                        Approve claim &amp; dispatch
+                      </button>
+                      <button onClick={() => setEditingFor(c.id)} className="h-11 rounded-[10px] border border-white/[.14] bg-transparent text-ink font-semibold text-[15px] cursor-pointer">
+                        Edit claim
+                      </button>
+                    </div>
                   ) : (
                     <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-white/[.05] text-[#8FC3DD] font-semibold">
                       <span className="font-mono">✓</span>

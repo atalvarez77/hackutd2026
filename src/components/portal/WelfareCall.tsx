@@ -45,7 +45,7 @@ function tone(k: string) {
 
 export function WelfareCall() {
   const store = useStore();
-  const { activeCustomer: c, callStatus, transcripts, contactRequests, agentTakeover } = store;
+  const { activeCustomer: c, callStatus, transcripts, contactRequests, agentTakeover, claims } = store;
   const es = c.language === 'es';
   const status = callStatus[c.id] || 'idle';
   const [speaking, setSpeaking] = useState(false);
@@ -144,6 +144,25 @@ export function WelfareCall() {
     setBanner(id);
     setTimeout(() => setBanner((b) => (b === id ? null : b)), 7000);
   };
+
+  // State Farm's status text when an agent approves the claim (a system notification, like a real
+  // carrier's, not something Nora says). Fires on the change, not for a claim that was already approved.
+  const claimStatus = claims[c.id]?.status;
+  const claimNumber = claims[c.id]?.number;
+  const prevStatus = useRef(claimStatus);
+  useEffect(() => {
+    const was = prevStatus.current;
+    prevStatus.current = claimStatus;
+    if (claimStatus === 'approved' && was && was !== 'approved') {
+      sms(
+        T(
+          `State Farm: Your claim ${claimNumber || ''} was approved. A crew is being scheduled and we’ll text you when it’s set.`,
+          `State Farm: Su reclamo ${claimNumber || ''} fue aprobado. Estamos programando un equipo y le avisaremos por mensaje.`,
+        ).replace('  ', ' '),
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [claimStatus]);
 
   const end = (note = 'Call ended by policyholder') => {
     try {
@@ -302,7 +321,7 @@ export function WelfareCall() {
                 ‹ {live ? T('Call', 'Llamada') : T('Back', 'Atrás')}
               </button>
               <span className="flex flex-col items-center">
-                <span className="w-10 h-10 rounded-full bg-[#ED1D24] text-white flex items-center justify-center font-semibold">SF</span>
+                <span className="w-10 h-10 rounded-full bg-[#E61A21] text-white flex items-center justify-center font-semibold">SF</span>
                 <span className="text-[12px]">State Farm</span>
               </span>
             </div>
@@ -418,7 +437,7 @@ export function WelfareCall() {
       {/* ---------- Live transcript ---------- */}
       <section className="lg:h-[720px] min-h-[420px] rounded-2xl border border-line bg-white flex flex-col overflow-hidden">
         <header className="px-5 py-4 border-b border-line flex items-center gap-3 flex-wrap">
-          <span className="font-semibold text-[20px]">{T('Call transcript', 'Transcripción de la llamada')}</span>
+          <h2 className="m-0 font-semibold text-[20px]">{T('Call transcript', 'Transcripción de la llamada')}</h2>
           {conf && <span className="text-[14px] text-grey">{T(`${c.emergencyContact.name} is on the call`, `${c.emergencyContact.name} está en la llamada`)}</span>}
           <span className="flex items-center gap-2 text-[15px] text-grey">
             {live && <span className="w-2 h-2 rounded-full bg-sf-red" />}
@@ -481,7 +500,7 @@ export function WelfareCall() {
                       key={s}
                       onClick={() => say(s)}
                       disabled={speaking || thinking}
-                      className="h-9 px-3.5 rounded-full border border-charcoal/30 bg-white text-[15px] cursor-pointer hover:border-charcoal disabled:opacity-40"
+                      className="min-h-11 px-4 rounded-full border border-charcoal/30 bg-white text-[15px] cursor-pointer hover:border-charcoal disabled:opacity-40"
                     >
                       {s}
                     </button>
@@ -500,7 +519,7 @@ export function WelfareCall() {
                   type="button"
                   onClick={toggleMic}
                   className="h-11 px-4 rounded-full border-0 text-[15px] font-semibold cursor-pointer whitespace-nowrap"
-                  style={{ background: listening ? '#ED1D24' : '#1A1A1A', color: '#fff' }}
+                  style={{ background: listening ? '#E61A21' : '#1A1A1A', color: '#fff' }}
                 >
                   {listening ? T('Listening…', 'Escuchando…') : T('Speak', 'Hablar')}
                 </button>
@@ -508,6 +527,7 @@ export function WelfareCall() {
                   value={typed}
                   onChange={(e) => setTyped(e.target.value)}
                   placeholder={T('Or type what you’d say', 'O escriba lo que diría')}
+                  aria-label={T('Type what you would say to Nora', 'Escriba lo que le diría a Nora')}
                   className="flex-1 min-w-0 h-11 px-4 rounded-full border border-line bg-white text-[15px] outline-none focus:border-charcoal/50"
                 />
               </form>
@@ -549,7 +569,7 @@ function Glyph({ d }: { d: string }) {
 function CallButton({ color, label, onClick, hangup = false, pulse = false }: { color: string; label?: string; onClick: () => void; hangup?: boolean; pulse?: boolean }) {
   return (
     <button onClick={onClick} aria-label={label || 'End call'} className="flex flex-col items-center gap-2 bg-transparent border-0 text-white cursor-pointer">
-      <span className="w-[74px] h-[74px] rounded-full flex items-center justify-center" style={{ background: color, animation: pulse ? 'hnRing 1.8s ease-out infinite' : undefined }}>
+      <span className={`w-[74px] h-[74px] rounded-full flex items-center justify-center${pulse ? ' hn-ring' : ''}`} style={{ background: color, animation: pulse ? 'hnRing 1.8s ease-out infinite' : undefined }}>
         <svg width="32" height="32" viewBox="0 0 24 24" fill="#fff" aria-hidden style={{ transform: hangup ? 'rotate(135deg)' : undefined }}>
           <path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.6a1 1 0 0 1-.25 1z" />
         </svg>

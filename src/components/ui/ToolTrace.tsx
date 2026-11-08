@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import type { ToolCall } from '@/types/statefarm';
 
-const COLOR: Record<ToolCall['status'], string> = { done: '#8FC3DD', running: '#FF6B73', queued: '#6E6878', paused: '#6E6878' };
+const COLOR: Record<ToolCall['status'], string> = { done: '#8FC3DD', running: '#FF6B73', queued: '#8A8494', paused: '#8A8494' };
 
 /** Nemotron tool-call log. Collapsed by default so the transcript stays the focus. */
 export function ToolTrace({ runs, paused }: { runs: ToolCall[]; paused: boolean }) {

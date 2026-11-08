@@ -71,7 +71,7 @@ export function AgentNav({
           style={{ color: '#B9A6C9' }}
           title={apiStatus !== 'up' ? 'FastAPI orchestrator not reachable · Nora can’t talk' : nemotron === false ? 'FastAPI is up but has no NVIDIA_API_KEY · Nora can’t talk' : 'FastAPI + Nemotron run Nora’s conversations'}
         >
-          <span className="w-2 h-2 rounded-full inline-block" style={{ background: apiStatus === 'up' && nemotron !== false ? '#8FC3DD' : apiStatus === 'checking' ? '#6E6878' : '#FF6B73' }} />
+          <span className="w-2 h-2 rounded-full inline-block" style={{ background: apiStatus === 'up' && nemotron !== false ? '#8FC3DD' : apiStatus === 'checking' ? '#8A8494' : '#FF6B73' }} />
           {apiStatus === 'up' ? (nemotron === false ? 'FastAPI · no Nemotron key' : 'FastAPI · Nemotron') : apiStatus === 'down' ? 'FastAPI offline' : 'FastAPI…'}
         </span>
         <span
@@ -79,7 +79,7 @@ export function AgentNav({
           style={{ color: '#B9A6C9' }}
           title={dbStatus === 'connected' ? 'Live on SpacetimeDB maincloud' : 'SpacetimeDB unreachable · syncing across local tabs only'}
         >
-          <span data-sync={lastSync} className="w-2 h-2 rounded-full inline-block" style={{ background: dbStatus === 'connected' ? '#8FC3DD' : '#6E6878' }} />
+          <span data-sync={lastSync} className="w-2 h-2 rounded-full inline-block" style={{ background: dbStatus === 'connected' ? '#8FC3DD' : '#8A8494' }} />
           {dbStatus === 'connected' ? 'Synced · SpacetimeDB' : dbStatus === 'connecting' ? 'Connecting…' : 'Synced · this browser'}
         </span>
         <label className="flex items-center gap-2 whitespace-nowrap">

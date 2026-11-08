@@ -104,6 +104,7 @@ export function NoraChat() {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder={T('Tell us how you’re doing…', 'Cuéntenos cómo está…')}
+          aria-label={T('Message to Nora', 'Mensaje para Nora')}
           className="flex-1 min-w-0 h-[52px] px-[18px] rounded-full border border-line text-base outline-none"
         />
         <button type="submit" className="h-[52px] px-[22px] rounded-full bg-sf-red text-white font-bold text-base cursor-pointer">

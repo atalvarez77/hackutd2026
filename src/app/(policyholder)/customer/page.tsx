@@ -54,7 +54,7 @@ export default function PortalPage() {
           <div className="flex flex-col gap-6">
 
           <section id="contacts" className="rounded-2xl border border-line p-6 flex flex-col gap-3 scroll-mt-[110px]">
-            <span className="font-display font-black text-[24px] leading-none">{T('Emergency contact', 'Contacto de emergencia')}</span>
+            <h2 className="m-0 font-display font-black text-[24px] leading-none">{T('Emergency contact', 'Contacto de emergencia')}</h2>
             <div className="flex items-center gap-3">
               <span className="w-10 h-10 rounded-full bg-petal flex items-center justify-center font-display font-black text-[15px]">{c.emergencyContact.name[0]}</span>
               <div className="flex-1 flex flex-col">

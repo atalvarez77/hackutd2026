@@ -30,9 +30,9 @@ export function ClaimStepper({
               <span
                 className="w-[34px] h-[34px] rounded-full flex items-center justify-center font-mono font-bold text-[13px]"
                 style={{
-                  background: past ? '#ED1D24' : '#fff',
-                  color: past ? '#fff' : cur ? '#ED1D24' : '#7D6F86',
-                  border: `2px solid ${past || cur ? '#ED1D24' : 'rgba(26,26,26,.15)'}`,
+                  background: past ? '#E61A21' : '#fff',
+                  color: past ? '#fff' : cur ? '#E61A21' : '#7D6F86',
+                  border: `2px solid ${past || cur ? '#E61A21' : 'rgba(26,26,26,.15)'}`,
                 }}
               >
                 {past ? '✓' : i + 1}

@@ -229,7 +229,7 @@ function ClaimFlowView() {
                       className="grid grid-cols-[44px_1fr_auto] gap-3.5 items-center px-[18px] py-4 rounded-2xl"
                       style={{ border: `2px solid ${on ? '#286784' : 'rgba(26,26,26,.12)'}`, background: on ? 'rgba(40,103,132,.06)' : '#fff' }}
                     >
-                      <span className="w-[38px] h-[38px] rounded-full text-white flex items-center justify-center font-mono font-bold text-sm" style={{ background: on ? '#286784' : i === 0 ? '#ED1D24' : '#C7BFCC' }}>
+                      <span className="w-[38px] h-[38px] rounded-full text-white flex items-center justify-center font-mono font-bold text-sm" style={{ background: on ? '#286784' : i === 0 ? '#E61A21' : '#C7BFCC' }}>
                         {i + 6}
                       </span>
                       <span className="flex flex-col gap-0.5">
@@ -258,7 +258,7 @@ function ClaimFlowView() {
               {!done && n < 2 && !allOk ? T('Confirm each item to continue.', 'Confirme cada dato para continuar.') : done ? T('You’ll get a text at each step.', 'Recibirá un mensaje en cada paso.') : n === 3 ? T('Coverage is from your policy on file.', 'La cobertura viene de su póliza.') : ''}
             </span>
             {!done ? (
-              <button onClick={next} className="h-[52px] px-[26px] rounded-full text-white font-extrabold text-base cursor-pointer" style={{ background: canNext ? '#ED1D24' : '#C7BFCC' }}>
+              <button onClick={next} className="h-[52px] px-[26px] rounded-full text-white font-extrabold text-base cursor-pointer" style={{ background: canNext ? '#E61A21' : '#C7BFCC' }}>
                 {n === 4 ? T('Submit claim', 'Enviar reclamo') : n === 2 ? T('Continue (photos optional)', 'Continuar (fotos opcionales)') : T('Confirm & continue', 'Confirmar y seguir')}
               </button>
             ) : (
