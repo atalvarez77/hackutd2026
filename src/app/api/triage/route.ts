@@ -181,8 +181,3 @@ You must return STRICTLY a valid JSON object matching this exact schema:
     );
   }
 }
-
-
-
-
-

@@ -13,10 +13,10 @@ import type {
   ToolCall,
   UrgencyLevel,
 } from '@/types/statefarm';
-import { first, FREEZE_RE, hazardFor, nowTime, reportsHazard } from '@/lib/hn';
+import { first, hazardFor, nowTime, WATER_BACKUP } from '@/lib/hn';
 import { DbConnection } from '@/module_bindings';
 import type { ActiveCall, Claim, Customer, Policy, TriageQueue } from '@/module_bindings/types';
-import { apiState, checkHealth, onApiChange, post, type AiSource, type ApiStatus, type TurnResult } from '@/lib/backend';
+import { apiState, checkHealth, onApiChange, post, postRaw, type ApiStatus, type NoraAction, type TurnFailure, type TurnResult } from '@/lib/backend';
 
 export type { TurnResult } from '@/lib/backend';
 
@@ -27,13 +27,11 @@ export type { TurnResult } from '@/lib/backend';
  * mirrored live from the tables and merged over the mock profiles. Only rows tied to a customer's
  * *open* call count, so a finished call (end_call) never leaks into the next one.
  *
- * The FastAPI orchestrator (backend/main.py) is the foundation: every caller turn, on the phone or
- * by text, goes through POST /api/chat. It runs Nemotron triage and writes the transcript, triage
- * ticket and claim. Every other write (Nora's lines, the agent, step-in, hang-up, consent,
- * approval) goes through its gateway endpoints too. Only while it's unreachable does the browser
- * write to SpacetimeDB directly. Until the team's nemotron_service.py exists the orchestrator
- * runs a stub, so Nora speaks her scripted lines; once it reports ai_source "nemotron" she
- * speaks the orchestrator's reply instead.
+ * Nora's conversation is owned by the FastAPI orchestrator (backend/main.py) and decided by
+ * Nemotron: the frontend sends what the caller said or pressed and carries out the actions
+ * that come back (open a claim, confirm details, text the caller, transfer...). Nothing here
+ * decides what Nora says or what happens next. The orchestrator also writes everything to
+ * SpacetimeDB; the browser writes directly only for agent-console actions while it's down.
  *
  * Things the database doesn't model (transfer requests, agent takeover, claim confirmations, the
  * running tool list, language, events in the transcript) live in a small UI layer that is saved to
@@ -111,14 +109,8 @@ function initialUi(): UiState {
       description: d.description,
       confirmed: {},
     };
-    transcripts[c.id] = c.chatTranscript.map((m) => ({
-      id: m.id,
-      kind: m.sender === 'bot' ? 'ai' : m.sender === 'agent' ? 'agent' : 'cust',
-      text: m.text.replace(/^⚠️\s*/, ''),
-      tr: SEED_TR[`${c.id}:${m.id}`],
-      time: m.timestamp,
-      channel: 'chat',
-    }));
+    // Initialize empty: do not inject c.chatTranscript
+    transcripts[c.id] = [];
   }
   return {
     activeCustomerId: initialCustomers[0].id,
@@ -128,7 +120,7 @@ function initialUi(): UiState {
     transcripts,
     toolRuns: {},
     priorityOverride: {},
-    callStatus: { 'cust-1': 'ringing', 'cust-6': 'ai', 'cust-2': 'ai' },
+    callStatus: {}, // was: { 'cust-1': 'ringing' } - change to empty object
     patches: {},
     reqSeq: 0,
     epoch: 0,
@@ -246,18 +238,19 @@ interface Ctx extends AppState {
   updateCustomerLanguage: (id: string, lang: Language) => void;
   /** `synced`: the line is already in the database (e.g. written by the orchestrator). */
   appendLine: (custId: string, line: Omit<Line, 'id' | 'time'> & { time?: string }, opts?: { synced?: boolean }) => void;
-  applyHazard: (custId: string, reported?: string, turn?: TurnResult | null) => ClaimFlow;
-  runTools: (custId: string, steps: ToolStep[]) => void;
-  runHazardPlan: (custId: string, reported: string, channel: 'chat' | 'call', turn?: TurnResult | null) => void;
+  /** Web claim form only ("Start a claim" without a call). */
+  applyHazard: (custId: string, reported?: string) => ClaimFlow;
+  /** Nora opens a call or chat. Resolves to her first turn, or why she couldn't answer. */
+  startCall: (custId: string, channel: 'call' | 'chat') => Promise<TurnResult | TurnFailure>;
   /**
-   * One thing the caller said (call or chat): logs it and sends it through FastAPI /api/chat.
-   * Resolves to the orchestrator's triage/claim result, or null if it's unreachable.
+   * Something from the caller: words, a keypad digit, or an event ("contact_added"). Logged, sent
+   * to the orchestrator, and Nora's reply + actions are applied. The phone plays the reply.
    */
-  customerTurn: (custId: string, text: string, opts: { channel: 'call' | 'chat'; stage?: string; tr?: string }) => Promise<TurnResult | null>;
-  /** FastAPI orchestrator reachability and whether it runs real Nemotron or its stub. */
+  customerTurn: (custId: string, input: { text?: string; dtmf?: string; event?: string }, channel: 'call' | 'chat') => Promise<TurnResult | TurnFailure>;
+  /** FastAPI reachability, and whether it has Nemotron configured (null = not known yet). */
   apiStatus: ApiStatus;
-  aiSource: AiSource | null;
-  sendChatMessage: (text: string) => Promise<'person' | 'hazard' | 'ok'>;
+  nemotron: boolean | null;
+  sendChatMessage: (text: string) => Promise<TurnResult | TurnFailure>;
   confirmClaimField: (custId: string, key: string, source: string | null) => void;
   submitClaim: (custId: string) => string;
   approveClaimDraft: (custId: string) => string | null;
@@ -427,7 +420,9 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       const call = dbActiveCalls.filter((a) => a.customerId === n && a.status !== 'completed').sort((a, b) => Number(b.id - a.id))[0];
       openCallOut[id] = call;
       const triage = call ? dbTriage.filter((t) => t.callId === call.id).sort((a, b) => Number(b.ticketId - a.ticketId))[0] : undefined;
-      const dbClaim = call ? dbClaims.filter((c) => c.callId === call.id).sort((a, b) => Number(b.id - a.id))[0] : undefined;
+      const dbClaim = dbClaims
+        .filter((c) => c.customerId === n)
+        .sort((a, b) => Number(b.id - a.id))[0];
       // Home policy first (a customer can also hold an auto policy).
       const policy = dbPolicies.filter((x) => x.customerId === n).sort((a, b) => Number(a.policyId - b.policyId))[0];
       const dbCust = dbCustomers.find((x) => x.id === n);
@@ -453,19 +448,7 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
       // Transcript: local lines, plus any spoken lines that only exist in the database
       // (e.g. written by the orchestrator or another device).
-      const mine = ui.transcripts[id] || [];
-      const unused = new Map<string, number>();
-      for (const l of mine) if (l.kind === 'ai' || l.kind === 'cust' || l.kind === 'agent') unused.set(l.kind + l.text, (unused.get(l.kind + l.text) || 0) + 1);
-      const extra = (call ? parseTranscript(call) : []).filter((l) => {
-        const k = l.kind + l.text;
-        const left = unused.get(k) || 0;
-        if (left > 0) {
-          unused.set(k, left - 1);
-          return false;
-        }
-        return true;
-      });
-      linesOut[id] = [...mine, ...extra];
+      linesOut[id] = call ? parseTranscript(call) : (ui.transcripts[id] || []);
 
       const score = p.riskScore ?? triage?.priorityScore ?? base.riskScore;
       return {
@@ -496,15 +479,40 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   /* ---------------- Database writes (fire-and-forget) ---------------- */
   const dbCall = (p: Promise<void> | undefined) => void p?.catch((e) => console.warn('[SpacetimeDB reducer]', e));
   /** Ids of the customer's current session: open call (or one this tab started), its ticket and claim. */
-  const session = (custId: string) => {
-    const L = live.current;
-    const callId = L.openCall[custId]?.id ?? (pendingCall.current[custId] ||= newCallId());
-    const ticketId = L.dbTriage.filter((t) => t.callId === callId).sort((a, b) => Number(b.ticketId - a.ticketId))[0]?.ticketId ?? callId;
-    const claimId = L.dbClaims.filter((c) => c.callId === callId).sort((a, b) => Number(b.id - a.id))[0]?.id ?? callId;
-    const n = dbIdOf(custId);
-    const policyId = L.dbPolicies.filter((x) => x.customerId === n).sort((a, b) => Number(a.policyId - b.policyId))[0]?.policyId ?? n;
-    return { callId, ticketId, claimId, policyId, customerId: n };
-  };
+const session = (custId: string) => {
+  const L = live.current;
+  const n = dbIdOf(custId);
+
+  // 1. Find the most recent claim for this customer in SpacetimeDB
+  const existingDbClaim = L.dbClaims
+    .filter((c) => c.customerId === n)
+    .sort((a, b) => Number(b.id - a.id))[0];
+
+  // 2. Find the most recent call (even if completed) or fall back to openCall
+  const mostRecentCall = dbActiveCalls
+    .filter((a) => a.customerId === n)
+    .sort((a, b) => Number(b.id - a.id))[0];
+
+  const callId =
+    L.openCall[custId]?.id ??
+    mostRecentCall?.id ??
+    (pendingCall.current[custId] ||= newCallId());
+
+  const ticketId =
+    L.dbTriage
+      .filter((t) => t.customerId === n)
+      .sort((a, b) => Number(b.ticketId - a.ticketId))[0]?.ticketId ?? callId;
+
+  // Re-use the existing claim's ID if one was already drafted!
+  const claimId = existingDbClaim?.id ?? callId;
+
+  const policyId =
+    L.dbPolicies
+      .filter((x) => x.customerId === n)
+      .sort((a, b) => Number(a.policyId - b.policyId))[0]?.policyId ?? n;
+
+  return { callId, ticketId, claimId, policyId, customerId: n };
+};
   const pushClaim = (custId: string, cl: ClaimFlow, customerApproved: boolean) => {
     const c = live.current.conn;
     if (!c) return;
@@ -592,183 +600,192 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }));
   };
 
-  const customerTurn: Ctx['customerTurn'] = async (custId, text, opts) => {
-    // Logged locally now; the orchestrator writes it to the transcript as part of the turn.
-    appendLine(custId, { kind: 'cust', text, channel: opts.channel, tr: opts.tr }, { synced: true });
-    // Context for Nemotron's prompt.
+  /** Short profile the orchestrator gives Nemotron (facts only; Nemotron decides what to do with them). */
+  const profileFor = (custId: string) => {
     const who = cust(custId);
-    const profile = {
+    return {
       name: who.name,
       age: who.age,
       lives_alone: who.livesAlone,
-      city: who.city,
-      address: who.address,
+      address: `${who.address}, ${who.city}, ${who.state} ${who.zip}`,
+      phone: who.phone,
       alert: `${who.weatherAlert.title}: ${who.weatherAlert.description}`,
-      policy_type: who.policy.type,
-      deductible: who.policy.deductible,
-      emergency_contact: `${who.emergencyContact.name} (${who.emergencyContact.relationship})`,
+      policy: `${who.policy.type}, policy ${who.policy.policyNumber}, dwelling limit $${who.policy.coverageLimit.toLocaleString()}, deductible $${who.policy.deductible.toLocaleString()}`,
+      water_backup_endorsement: WATER_BACKUP[custId] || 'unknown',
+      emergency_contact: `${who.emergencyContact.name} (${who.emergencyContact.relationship}, ${who.emergencyContact.phone})`,
+      prior_claims: who.claimsHistory.map((h) => `${h.date.slice(0, 4)} ${h.type}`).join('; ') || 'none',
     };
-    const turn = await queued(custId, () =>
-      post<TurnResult>('/api/chat', { ...ref(custId), user_transcript: text, stage: opts.stage, scripted: true, lang: who.language, profile }, 25000),
-    );
-    if (!turn) {
-      // Orchestrator unreachable: write the caller's line ourselves.
-      const c = live.current.conn;
-      if (c) {
-        const s = session(custId);
-        dbCall(c.reducers.updateCallTranscript({ callId: s.callId, customerId: s.customerId, transcriptChunk: `Customer: ${text}` }));
-      }
-      return null;
-    }
-    adopt(custId, turn);
-    // The orchestrator's triage is the ranking the console shows.
-    if (typeof turn.priority_score === 'number') {
-      const hz = turn.detected_hazard && turn.detected_hazard !== 'None' ? turn.detected_hazard : undefined;
-      patchCustomer(custId, { riskScore: turn.priority_score, urgency: tierOf(turn.priority_score), ...(hz ? { detectedHazard: hz } : {}) });
-    }
-    return turn;
   };
 
-  const applyHazard: Ctx['applyHazard'] = (custId, reported, turn) => {
+  const isFailure = (r: TurnResult | TurnFailure): r is TurnFailure => 'error' in r;
+
+  const TOOL_NAMES: Record<NoraAction['type'], string> = {
+    open_claim: 'open_claim',
+    update_risk: 'update_risk',
+    confirm_details: 'confirm_details',
+    notify_emergency_contact: 'notify_emergency_contact',
+    text_caller: 'text_caller',
+    submit_claim: 'submit_claim',
+    transfer_to_agent: 'transfer_to_agent',
+    set_language: 'set_language',
+    end_call: 'end_call',
+  };
+
+  /** Carry out what Nora decided (data side; the phone handles speaking, texts banners and hanging up). */
+  const applyActions = (custId: string, r: TurnResult, channel: 'call' | 'chat') => {
+    const runs: ToolCall[] = [];
+    for (const a of r.actions) {
+      switch (a.type) {
+        case 'open_claim': {
+          const claim: ClaimFlow = {
+            id: 'CLM-' + (r.call_id ?? uid()),
+            status: 'draft',
+            type: a.loss_type,
+            amount: a.estimated_payout,
+            description: a.damage_description,
+            confirmed: {},
+          };
+          update((s) =>
+            touch(
+              {
+                ...s,
+                claims: { ...s.claims, [custId]: claim },
+                patches: {
+                  ...s.patches,
+                  [custId]: { ...s.patches[custId], riskScore: a.risk_score, urgency: tierOf(a.risk_score), detectedHazard: a.hazard || a.loss_type, checkInStatus: 'urgent_attention' },
+                },
+              },
+              'cu:' + custId,
+            ),
+          );
+          appendLine(custId, { kind: 'claim', text: '', channel });
+          runs.push({ name: TOOL_NAMES[a.type], output: `${a.loss_type} · $${Math.round(a.estimated_payout).toLocaleString()}`, status: 'done' });
+          break;
+        }
+        case 'update_risk':
+          patchCustomer(custId, {
+            riskScore: a.risk_score,
+            urgency: tierOf(a.risk_score),
+            ...(a.hazard ? { detectedHazard: a.hazard } : {}),
+            ...(a.hazard === 'None' ? { checkInStatus: 'completed' as const } : {}),
+          });
+          runs.push({ name: TOOL_NAMES[a.type], output: `risk ${a.risk_score}${a.hazard ? ' · ' + a.hazard : ''}`, status: 'done' });
+          break;
+        case 'confirm_details':
+          a.fields.forEach((f) => confirmClaimField(custId, f, channel === 'call' ? 'Confirmed on call' : 'Confirmed in chat'));
+          runs.push({ name: TOOL_NAMES[a.type], output: a.fields.join(', '), status: 'done' });
+          break;
+        case 'notify_emergency_contact': {
+          const ec = cust(custId).emergencyContact;
+          appendLine(custId, { kind: 'event', text: `Nora texted ${ec.name} (${ec.relationship})`, dot: 'blue' });
+          runs.push({ name: TOOL_NAMES[a.type], output: `SMS → ${ec.name}`, status: 'done' });
+          break;
+        }
+        case 'text_caller':
+          appendLine(custId, { kind: 'event', text: `Nora texted the policyholder: “${a.text}”`, dot: 'blue' });
+          runs.push({ name: TOOL_NAMES[a.type], output: a.text.slice(0, 60), status: 'done' });
+          break;
+        case 'submit_claim':
+          update((s) => {
+            const cur = s.claims[custId] || live.current.claims[custId];
+            if (!cur) return s;
+            return { ...s, claims: { ...s.claims, [custId]: { ...cur, status: cur.status === 'approved' ? 'approved' : 'submitted', number: a.claim_number, submittedAt: nowTime() } } };
+          });
+          appendLine(custId, { kind: 'event', text: `Policyholder agreed to submit → ${a.claim_number}`, dot: 'lavender' });
+          runs.push({ name: TOOL_NAMES[a.type], output: a.claim_number, status: 'done' });
+          break;
+        case 'transfer_to_agent':
+          createContactRequest(custId, channel === 'call' ? 'call' : 'text', a.reason || cust(custId).detectedHazard, channel === 'call');
+          runs.push({ name: TOOL_NAMES[a.type], output: a.reason || 'requested', status: 'done' });
+          break;
+        case 'set_language':
+          patchCustomer(custId, { language: a.language });
+          runs.push({ name: TOOL_NAMES[a.type], output: a.language, status: 'done' });
+          break;
+        case 'end_call':
+          runs.push({ name: TOOL_NAMES[a.type], output: 'goodbye', status: 'done' });
+          break;
+      }
+    }
+    if (runs.length) update((s) => touch({ ...s, toolRuns: { ...s.toolRuns, [custId]: [...(s.toolRuns[custId] || []), ...runs] } }, 'to:' + custId));
+  };
+
+  /** Log Nora's reply (already in the database, written by the orchestrator) and apply her actions. */
+  const handleTurn = (custId: string, r: TurnResult | TurnFailure, channel: 'call' | 'chat') => {
+    if (isFailure(r)) {
+      appendLine(custId, {
+        kind: 'event',
+        text: r.error === 'offline' ? 'Nora is offline: the FastAPI orchestrator isn’t reachable' : `Nora can’t respond: ${r.detail || 'Nemotron unavailable'}`,
+        dot: 'red',
+      });
+      return r;
+    }
+    adopt(custId, r);
+    if (r.reply && !r.repeat) appendLine(custId, { kind: 'ai', text: r.reply, channel }, { synced: true });
+    applyActions(custId, r, channel);
+    return r;
+  };
+
+  const turnBody = (custId: string, channel: 'call' | 'chat') => {
     const c = cust(custId);
-    const local = hazardFor(c, reported);
-    // Prefer what the orchestrator decided; it has already written triage + claim to the database.
-    const h = turn?.claim
-      ? { hazard: turn.detected_hazard || local.hazard, type: turn.claim.hazard_type, amount: turn.claim.est_payout }
-      : local;
+    return { ...ref(custId), language: c.language, channel, profile: profileFor(custId) };
+  };
+
+  const startCall: Ctx['startCall'] = async (custId, channel) => {
+    const r = await queued(custId, () => postRaw<TurnResult>('/api/call/start', turnBody(custId, channel), 45000));
+    return handleTurn(custId, r, channel);
+  };
+
+  const customerTurn: Ctx['customerTurn'] = async (
+    custId: string,
+    input: any,
+    channelOrOpts: any = 'call'
+  ) => {
+    // Normalize arguments whether called from WelfareCall or NoraChat
+    const rawText: string | undefined = typeof input === 'string' ? input : input?.text;
+    const dtmf: string | undefined = typeof input === 'object' ? input?.dtmf : undefined;
+    const event: string | undefined = typeof input === 'object' ? input?.event : undefined;
+    const channel: 'call' | 'chat' = typeof channelOrOpts === 'string' ? channelOrOpts : (channelOrOpts?.channel || 'call');
+
+    if (rawText) {
+      appendLine(custId, { kind: 'cust', text: rawText, channel }, { synced: true });
+    }
+    if (dtmf) {
+      appendLine(custId, { kind: 'event', text: `Policyholder pressed ${dtmf} on the keypad`, dot: 'lavender' });
+    }
+
+    const r = await queued(custId, () =>
+      postRaw<TurnResult>(
+        '/api/chat',
+        {
+          ...turnBody(custId, channel),
+          user_transcript: rawText,
+          dtmf,
+          event,
+        },
+        45000,
+      ),
+    );
+
+    return handleTurn(custId, r, channel);
+  };
+
+  /** Web claim form only: start a claim without a call (the caller filled in the form themselves). */
+  const applyHazard: Ctx['applyHazard'] = (custId, reported) => {
+    const c = cust(custId);
+    const h = hazardFor(c, reported);
     const existing = live.current.claims[custId];
     const claim: ClaimFlow =
       existing && existing.status !== 'none'
         ? existing
-        : {
-            id: 'DRF-99',
-            status: 'draft',
-            type: h.type,
-            amount: h.amount,
-            description: turn?.claim?.description || `Reported by policyholder: ${reported || h.hazard}`,
-            confirmed: {},
-          };
-    const score = typeof turn?.priority_score === 'number' ? turn.priority_score : Math.min(98, c.riskScore + 10);
-    update((s) =>
-      touch(
-        {
-          ...s,
-          claims: { ...s.claims, [custId]: claim },
-          patches: { ...s.patches, [custId]: { ...s.patches[custId], riskScore: score, urgency: 'High', detectedHazard: h.hazard, checkInStatus: 'urgent_attention' } },
-        },
-        'cu:' + custId,
-      ),
-    );
-    // If the orchestrator's turn didn't produce triage + claim itself, send them through it now.
-    if (!turn?.claim) {
-      writeTriage(custId, score, h.type, `Reported by policyholder: ${reported || h.hazard}`, h.hazard);
-      if (claim !== existing) writeClaim(custId, claim, false);
-    }
+        : { id: 'DRF-99', status: 'draft', type: h.type, amount: h.amount, description: `Started on the web by the policyholder: ${reported || h.hazard}`, confirmed: {} };
+    update((s) => touch({ ...s, claims: { ...s.claims, [custId]: claim } }, 'cu:' + custId));
+    writeTriage(custId, Math.max(c.riskScore, 60), h.type, 'Claim started on the web', h.hazard);
+    if (claim !== existing) writeClaim(custId, claim, false);
     return claim;
   };
 
-  const runTools: Ctx['runTools'] = (custId, steps) => {
-    update((s) => touch({ ...s, toolRuns: { ...s.toolRuns, [custId]: steps.map((t) => ({ name: t.name, output: t.output, status: 'queued' })) } }, 'to:' + custId));
-    const setStatus = (i: number, status: ToolCall['status']) =>
-      update((s) => touch({ ...s, toolRuns: { ...s.toolRuns, [custId]: (s.toolRuns[custId] || []).map((t, j) => (j === i ? { ...t, status } : t)) } }, 'to:' + custId));
-    steps.forEach((t, i) => {
-      setTimeout(() => {
-        if (live.current.ui.agentTakeover[custId]) return;
-        setStatus(i, 'running');
-      }, 600 * i + 50);
-      setTimeout(() => {
-        if (live.current.ui.agentTakeover[custId]) return setStatus(i, 'paused');
-        setStatus(i, 'done');
-        t.effect?.();
-      }, 600 * i + 550);
-    });
-  };
-
-  /** Default Nemotron plan for a hazard: risk → claim → emergency contact. */
-  const hazardPlan = (custId: string, reported: string, channel: 'chat' | 'call', turn?: TurnResult | null): ToolStep[] => {
-    const c = cust(custId);
-    const local = hazardFor(c, reported);
-    const h = turn?.claim ? { hazard: turn.detected_hazard || local.hazard, type: turn.claim.hazard_type, amount: turn.claim.est_payout } : local;
-    const to = typeof turn?.priority_score === 'number' ? turn.priority_score : Math.min(98, c.riskScore + 10);
-    return [
-      { name: 'assess_risk_and_update_score', output: `risk ${c.riskScore} → ${to} · ${h.hazard}`, effect: () => applyHazard(custId, reported, turn) },
-      { name: 'auto_file_claim', output: `DRF-99 · ${h.type} · $${h.amount.toLocaleString()}`, effect: () => appendLine(custId, { kind: 'claim', text: '', channel }) },
-      {
-        name: 'trigger_emergency_contact',
-        output: `SMS → ${c.emergencyContact.name} (${c.emergencyContact.relationship})`,
-        effect: () => appendLine(custId, { kind: 'event', text: `trigger_emergency_contact → SMS sent to ${c.emergencyContact.name}`, dot: 'blue' }),
-      },
-    ];
-  };
-
-  /** Wording for Nora's text reply when the orchestrator only has its stub (or is down). */
-  const chatWording = async (custId: string, text: string): Promise<{ reply: string; toolCalls?: { name: string; output: string }[] }> => {
-    const c = cust(custId);
-    try {
-      const res = await fetch('/api/nemotron-agent', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          customerId: custId,
-          message: text,
-          lang: c.language,
-          customer: { name: c.name, age: c.age, livesAlone: c.livesAlone, hazard: c.detectedHazard, risk: c.riskScore, contact: c.emergencyContact.name },
-        }),
-      });
-      if (!res.ok) throw new Error('bad response');
-      return await res.json();
-    } catch {
-      const hz = reportsHazard(text);
-      const frz = FREEZE_RE.test(text);
-      const es = c.language === 'es';
-      return {
-        reply: hz
-          ? frz
-            ? es
-              ? 'Parece una tubería congelada. No la descongele con fuego. Ya inicié un reclamo por daño de agua; no tiene que llenar formularios.'
-              : 'That sounds like a frozen pipe. Please don’t thaw it with an open flame. I’ve started a water-damage claim for you, so you won’t need to fill in any forms.'
-            : es
-              ? 'Siento mucho lo que pasó. Por favor manténgase lejos de cualquier peligro. Ya inicié un reclamo; no tiene que llenar formularios.'
-              : 'I’m sorry that happened. Please stay away from anything unsafe. I’ve started a claim for you, so you won’t need to fill in any forms.'
-          : es
-            ? 'Qué bueno. Si algo cambia, escríbame aquí o llámenos cuando quiera. Le escribo de nuevo en la mañana.'
-            : 'Glad to hear it. If anything changes, message me here or call us any time. I’ll check in again in the morning.',
-      };
-    }
-  };
-
-  const sendChatMessage: Ctx['sendChatMessage'] = async (text) => {
-    const custId = live.current.ui.activeCustomerId;
-    if (/person|persona/i.test(text)) {
-      appendLine(custId, { kind: 'cust', text, channel: 'chat' });
-      return 'person';
-    }
-
-    // Every message is a turn through the FastAPI orchestrator.
-    const turn = await customerTurn(custId, text, { channel: 'chat' });
-    if (turn) {
-      if (turn.ai_source === 'nemotron' && turn.reply) {
-        appendLine(custId, { kind: 'ai', text: turn.reply, channel: 'chat' }, { synced: turn.reply_logged });
-      } else {
-        appendLine(custId, { kind: 'ai', text: (await chatWording(custId, text)).reply, channel: 'chat' });
-      }
-      if (turn.claim) {
-        runTools(custId, hazardPlan(custId, text, 'chat', turn));
-        return 'hazard';
-      }
-      return 'ok';
-    }
-
-    // Orchestrator down: built-in Nemotron route (or offline reply) decides, and we write directly.
-    const w = await chatWording(custId, text);
-    appendLine(custId, { kind: 'ai', text: w.reply, channel: 'chat' });
-    const hz = w.toolCalls ? w.toolCalls.length > 0 : reportsHazard(text);
-    if (hz) {
-      const plan = hazardPlan(custId, text, 'chat');
-      runTools(custId, w.toolCalls?.length ? w.toolCalls.map((tc) => ({ name: tc.name, output: tc.output, effect: plan.find((p) => p.name === tc.name)?.effect })) : plan);
-    }
-    return hz ? 'hazard' : 'ok';
-  };
+  const sendChatMessage: Ctx['sendChatMessage'] = (text) => customerTurn(live.current.ui.activeCustomerId, { text }, 'chat');
 
   const confirmClaimField: Ctx['confirmClaimField'] = (custId, key, source) =>
     update((s) => {
@@ -893,14 +910,6 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   const sendAgentMessage: Ctx['sendAgentMessage'] = (custId, text) => {
     appendLine(custId, { kind: 'agent', text, channel: 'call' });
-    // Background demo customers answer on their own; the active policyholder answers from the portal.
-    if (custId !== live.current.ui.activeCustomerId) {
-      const es = cust(custId).language === 'es';
-      setTimeout(
-        () => appendLine(custId, { kind: 'cust', channel: 'call', text: es ? 'Gracias, mijo. Muy amable.' : 'Oh, thank you. It’s nice to hear a real person.', tr: es ? 'Thank you, dear. Very kind.' : undefined }),
-        1600,
-      );
-    }
   };
 
   const setPriorityOverride: Ctx['setPriorityOverride'] = (custId, tier) => {
@@ -953,11 +962,10 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     updateCustomerLanguage: (id, lang) => patchCustomer(id, { language: lang }),
     appendLine,
     applyHazard,
-    runTools,
-    runHazardPlan: (custId, reported, channel, turn) => runTools(custId, hazardPlan(custId, reported, channel, turn)),
+    startCall,
     customerTurn,
     apiStatus: api.status,
-    aiSource: api.source,
+    nemotron: api.nemotron,
     sendChatMessage,
     confirmClaimField,
     submitClaim,
