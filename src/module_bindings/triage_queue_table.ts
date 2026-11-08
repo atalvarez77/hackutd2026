@@ -13,6 +13,7 @@ import {
 export default __t.row({
   ticketId: __t.u64().primaryKey().name("ticket_id"),
   customerId: __t.u64().name("customer_id"),
+  callId: __t.u64().name("call_id"),
   priorityScore: __t.u32().name("priority_score"),
   category: __t.string(),
   summaryReason: __t.string().name("summary_reason"),

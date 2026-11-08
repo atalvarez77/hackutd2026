@@ -14,6 +14,7 @@ export default {
   claimId: __t.u64(),
   customerId: __t.u64(),
   policyId: __t.u64(),
+  callId: __t.u64(),
   description: __t.string(),
   hazardType: __t.string(),
   estPayout: __t.f64(),
