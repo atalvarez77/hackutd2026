@@ -1,141 +1,163 @@
-"""
-Nemotron triage for one caller turn, via NVIDIA NIM (OpenAI-compatible chat completions).
-
-Ported from the `nemotron` branch's Next.js route (same model and JSON-only prompt), reshaped
-to what the orchestrator (main.py) writes to SpacetimeDB.
-
-    process_disaster_turn(customer_id, user_transcript, stage=None, lang="en", profile=None) -> dict
-        voice_reply      what Nora says (1-2 sentences, caller's language)
-        priority_score   0-100, or None when this turn doesn't change triage
-        category, summary_reason, detected_hazard
-        claim            {description, hazard_type, est_payout, customer_approved} or None
-        consent          caller agreed to submit the claim
-
-Needs NVIDIA_API_KEY (backend/.env or the environment). Without it, ENABLED is False and the
-orchestrator uses its keyword stub. Any request/parse failure raises, and the orchestrator falls
-back to the stub for that turn.
-"""
-
-import json
 import os
 import re
-from typing import Any, Dict, Optional
-
-import httpx
+import json
+from openai import AsyncOpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
 
-API_KEY = os.getenv("NVIDIA_API_KEY", "").strip()
-MODEL = os.getenv("NEMOTRON_MODEL", "nvidia/nemotron-3.5-super-vl-120b-a12b")
-NIM_URL = os.getenv("NIM_URL", "https://integrate.api.nvidia.com/v1/chat/completions")
-ENABLED = bool(API_KEY)
+client = AsyncOpenAI(
+    base_url=os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
+    api_key=os.getenv("NVIDIA_API_KEY")
+)
 
-# What Nora must accomplish at each step of the frontend's scripted welfare call, so Nemotron's
-# words keep the call moving in the same order.
-STEP_GOALS = {
-    "greet": (
-        "This is the caller's first answer. If they report any damage or danger, be empathetic, say you've already "
-        "started a claim using what State Farm has on file (no forms), and ask them to confirm it started this morning "
-        "at their home address. If they're safe, reassure them and give one short safety tip for the alert."
-    ),
-    "details": "Thank them for confirming. Ask whether everyone is safe, and say you're texting their emergency contact.",
-    "fix": "Say you've noted the correction for the adjuster, then ask whether everyone is safe.",
-    "safety": "Acknowledge their safety answer. Say photos help but are optional; they can add them later or the adjuster takes them.",
-    "photos": (
-        "Say you checked their policy: the damage looks covered and their deductible applies, but the adjuster makes the "
-        "final call. Ask if they'd like you to submit the claim now."
-    ),
-    "submitted": "Thank them and say goodbye; you'll check in again at 8 AM.",
-    "closing": "Thank them and say goodbye; you'll check in again at 8 AM.",
-    "transfer": "Reassure them a State Farm agent is joining the call and already has everything.",
-}
+FALLBACK_MODELS = [
+    os.getenv("NVIDIA_MODEL"),
+    "nvidia/llama-3.3-nemotron-super-49b-v1",
+    "nvidia/llama-3.1-nemotron-70b-instruct",
+    "meta/llama-3.3-70b-instruct",
+    "nvidia/nemotron-3.5-super-vl-120b-a12b",
+]
 
-SYSTEM = """You are Nora, State Farm's AI welfare-check assistant during a disaster or emergency (storm, flood,
-wildfire, freeze, extreme heat, power outage or similar). Don't assume which kind; go by the alert and what the
-caller says. Never say a claim IS covered; say it "looks covered" and the adjuster confirms.
-Return ONLY a JSON object, no prose, with exactly these keys:
-{
-  "hazard_reported": boolean,   // the caller reported damage or danger in THIS message
-  "caller_is_safe": boolean,    // the caller said they are okay / no damage
-  "consent_to_submit": boolean, // the caller agreed to submit the claim
-  "risk_score": number,         // 0-100 urgency for this household
-  "category": string,           // short triage category, e.g. "Flood", "Fire", "Freeze / Water", "Check-in"
-  "detected_hazard": string,    // short hazard label, or "None"
-  "summary_reason": string,     // one line for the agent queue
-  "claim_hazard_type": string,  // claim type if hazard_reported, else ""
-  "estimated_loss": number,     // USD estimate if hazard_reported, else 0
-  "reply": string               // what Nora says next: 1-2 short, warm sentences, plain text, no emoji
-}"""
+def extract_nemotron_fields(raw_text: str, default_message: str, lang: str = "en") -> dict:
+    """
+    Intelligently extracts speech and triage fields from Nemotron,
+    even if markdown fences exist or the JSON was truncated mid-generation.
+    """
+    # 1. Strip <think> tags and markdown backticks
+    clean = re.sub(r"<think>[\s\S]*?<\/think>", "", raw_text)
+    clean = re.sub(r"```(?:json)?", "", clean).replace("```", "").strip()
 
+    # 2. Try standard JSON parse if complete
+    try:
+        match = re.search(r"\{[\s\S]*\}", clean)
+        if match:
+            parsed = json.loads(match.group(0))
+            if parsed.get("reply"):
+                return parsed
+    except Exception:
+        pass
 
-def _profile_text(profile: Optional[Dict[str, Any]]) -> str:
-    if not profile:
-        return "No profile available."
-    keys = ["name", "age", "lives_alone", "city", "address", "alert", "policy_type", "deductible", "emergency_contact"]
-    return "; ".join(f"{k}: {profile[k]}" for k in keys if profile.get(k) not in (None, ""))
+    # 3. Resilient Regex Extraction (rescues truncated or unclosed JSON)
+    extracted_reply = None
+    reply_match = re.search(r'"reply"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)', clean)
+    if reply_match:
+        extracted_reply = reply_match.group(1).encode('utf-8').decode('unicode_escape', 'ignore')
 
+    # Extract risk score (e.g., 90)
+    extracted_score = None
+    score_match = re.search(r'"risk_score"\s*:\s*(\d+)', clean)
+    if score_match:
+        extracted_score = int(score_match.group(1))
 
-async def process_disaster_turn(
-    customer_id: int,
-    user_transcript: str,
-    stage: Optional[str] = None,
-    lang: str = "en",
-    profile: Optional[Dict[str, Any]] = None,
-) -> dict:
-    if not ENABLED:
-        raise RuntimeError("NVIDIA_API_KEY is not set")
+    # Extract agent action
+    extracted_action = None
+    action_match = re.search(r'"agent_action"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)', clean)
+    if action_match:
+        extracted_action = action_match.group(1).encode('utf-8').decode('unicode_escape', 'ignore')
 
-    goal = STEP_GOALS.get(stage or "", "Answer helpfully and briefly.")
-    user = (
-        f"Caller profile: {_profile_text(profile)}\n"
-        f"Reply language: {'Spanish' if lang == 'es' else 'English'}\n"
-        f"Call step: {stage or 'chat'}. Nora's goal for this reply: {goal}\n"
-        f'Caller just said: "{user_transcript}"'
+    # Extract reasons
+    extracted_reasons = []
+    reasons_match = re.search(r'"top_reasons"\s*:\s*\[(.*?)\]', clean, re.DOTALL)
+    if reasons_match:
+        extracted_reasons = [
+            r.strip().strip('"\'') 
+            for r in reasons_match.group(1).split(',') 
+            if r.strip().strip('"\'')
+        ]
+
+    # Check damage keywords
+    is_damage = bool(re.search(r"freeze|burst|flood|pipe|leak|danger|cold|water|roof|caved", default_message, re.I))
+
+    # If regex rescued the spoken reply, build the structured dictionary
+    if extracted_reply:
+        return {
+            "reply": extracted_reply,
+            "triage": {
+                "risk_score": extracted_score or (90 if is_damage else 30),
+                "top_reasons": extracted_reasons or [default_message],
+                "agent_action": extracted_action or "Dispatch emergency restoration team and verify safety.",
+                "file_claim": is_damage,
+                "claim_summary": {
+                    "loss_type": "Emergency Weather Damage",
+                    "damage_description": default_message,
+                    "estimated_initial_payout": 3000.0,
+                } if is_damage else None
+            }
+        }
+
+    # Safe fallback if completely unparseable
+    return {
+        "reply": (
+            "Lamento mucho lo que está sucediendo. Manténgase a salvo lejos del agua. He notificado a su agente."
+            if lang == "es" else
+            "I'm so sorry this is happening. Please prioritize your safety and avoid electrical hazards. I have alerted our team."
+        ),
+        "triage": {
+            "risk_score": 85 if is_damage else 25,
+            "top_reasons": [default_message],
+            "agent_action": "Dispatch emergency response team.",
+            "file_claim": is_damage,
+            "claim_summary": {
+                "loss_type": "Emergency Weather Damage",
+                "damage_description": default_message,
+                "estimated_initial_payout": 3000.0,
+            } if is_damage else None
+        }
+    }
+
+async def process_disaster_turn(customer_id: int, message: str, transcript: list = None, lang: str = "en") -> dict:
+    api_key = os.getenv("NVIDIA_API_KEY")
+    if not api_key:
+        return extract_nemotron_fields("", message, lang)
+
+    system_prompt = (
+        "You are the Dual-Phase Agentic State Farm Emergency Response Orchestrator powered by NVIDIA Nemotron.\n"
+        "You must return STRICTLY a valid JSON object matching this schema:\n"
+        "{\n"
+        f'  "reply": "Empathetic conversational response in {lang}. Max 2-3 sentences. Never include raw JSON or score tags here.",\n'
+        '  "triage": {\n'
+        '    "risk_score": number (0 to 100),\n'
+        '    "top_reasons": ["reason 1", "reason 2"],\n'
+        '    "agent_action": "Action for human agent",\n'
+        '    "file_claim": boolean,\n'
+        '    "claim_summary": {\n'
+        '      "loss_type": "Emergency Weather Damage",\n'
+        '      "damage_description": "summary",\n'
+        '      "estimated_initial_payout": 3000.0\n'
+        '    }\n'
+        '  }\n'
+        '}'
     )
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            NIM_URL,
-            headers={"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"},
-            json={
-                "model": MODEL,
-                "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}],
-                "temperature": 0.3,
-                "max_tokens": 600,
-            },
-            timeout=20.0,
-        )
-    resp.raise_for_status()
-    content = resp.json()["choices"][0]["message"]["content"] or ""
-    match = re.search(r"\{[\s\S]*\}", content)
-    if not match:
-        raise ValueError(f"Nemotron returned no JSON: {content[:200]}")
-    ai = json.loads(match.group(0))
+    messages = [{"role": "system", "content": system_prompt}]
 
-    hazard = bool(ai.get("hazard_reported")) and not bool(ai.get("caller_is_safe"))
-    out: Dict[str, Any] = {
-        "voice_reply": str(ai.get("reply") or "").strip() or "I've noted that.",
-        "consent": bool(ai.get("consent_to_submit")),
-    }
-    if hazard:
-        out.update(
-            priority_score=max(0, min(100, int(ai.get("risk_score", 80)))),
-            category=str(ai.get("category") or "Property damage"),
-            summary_reason=str(ai.get("summary_reason") or f"Reported: {user_transcript[:120]}"),
-            detected_hazard=str(ai.get("detected_hazard") or "Reported damage"),
-            claim={
-                "description": f"Reported by policyholder: {user_transcript[:200]}",
-                "hazard_type": str(ai.get("claim_hazard_type") or ai.get("category") or "Property damage"),
-                "est_payout": float(ai.get("estimated_loss") or 3500),
-                "customer_approved": False,
-            },
-        )
-    elif stage in (None, "greet") and ai.get("caller_is_safe"):
-        out.update(
-            priority_score=max(0, min(100, int(ai.get("risk_score", 20)))),
-            category=str(ai.get("category") or "Check-in"),
-            summary_reason=str(ai.get("summary_reason") or "Policyholder reports they are safe"),
-            detected_hazard="None",
-        )
-    return out
+    if transcript and isinstance(transcript, list):
+        for t in transcript:
+            sender = t.get("sender")
+            text = t.get("text", "")
+            if sender in ["customer", "user"]:
+                messages.append({"role": "user", "content": text})
+            elif sender in ["bot", "agent", "assistant"]:
+                messages.append({"role": "assistant", "content": text})
+
+    messages.append({"role": "user", "content": message})
+
+    active_models = [m for m in FALLBACK_MODELS if m]
+    content = ""
+
+    for model_name in active_models:
+        try:
+            completion = await client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                temperature=0.2,
+                max_tokens=1200,  # Increased from 800 to prevent truncated output
+            )
+            if completion:
+                content = completion.choices[0].message.content or ""
+                break
+        except Exception as e:
+            print(f"[Nemotron Model Fallback] {model_name} failed: {e}")
+
+    return extract_nemotron_fields(content, message, lang)
