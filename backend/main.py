@@ -119,7 +119,11 @@ async def execute_sql(client: httpx.AsyncClient, query: str) -> List[List[Any]]:
             timeout=3.0
         )
         if resp.status_code == 200:
-            return resp.json().get("rows", [])
+            data = resp.json()
+            # The SQL endpoint returns one result object per statement: [{"schema": ..., "rows": [...]}].
+            if isinstance(data, list):
+                data = data[0] if data else {}
+            return data.get("rows", [])
     except Exception as e:
         print(f"[SQL Query Error] {e}")
     return []
