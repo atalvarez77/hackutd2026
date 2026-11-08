@@ -109,14 +109,8 @@ function initialUi(): UiState {
       description: d.description,
       confirmed: {},
     };
-    transcripts[c.id] = c.chatTranscript.map((m) => ({
-      id: m.id,
-      kind: m.sender === 'bot' ? 'ai' : m.sender === 'agent' ? 'agent' : 'cust',
-      text: m.text.replace(/^⚠️\s*/, ''),
-      tr: SEED_TR[`${c.id}:${m.id}`],
-      time: m.timestamp,
-      channel: 'chat',
-    }));
+    // Initialize empty: do not inject c.chatTranscript
+    transcripts[c.id] = [];
   }
   return {
     activeCustomerId: initialCustomers[0].id,
@@ -126,7 +120,7 @@ function initialUi(): UiState {
     transcripts,
     toolRuns: {},
     priorityOverride: {},
-    callStatus: { 'cust-1': 'ringing' },
+    callStatus: {}, // was: { 'cust-1': 'ringing' } - change to empty object
     patches: {},
     reqSeq: 0,
     epoch: 0,
@@ -454,19 +448,7 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
       // Transcript: local lines, plus any spoken lines that only exist in the database
       // (e.g. written by the orchestrator or another device).
-      const mine = ui.transcripts[id] || [];
-      const unused = new Map<string, number>();
-      for (const l of mine) if (l.kind === 'ai' || l.kind === 'cust' || l.kind === 'agent') unused.set(l.kind + l.text, (unused.get(l.kind + l.text) || 0) + 1);
-      const extra = (call ? parseTranscript(call) : []).filter((l) => {
-        const k = l.kind + l.text;
-        const left = unused.get(k) || 0;
-        if (left > 0) {
-          unused.set(k, left - 1);
-          return false;
-        }
-        return true;
-      });
-      linesOut[id] = [...mine, ...extra];
+      linesOut[id] = call ? parseTranscript(call) : (ui.transcripts[id] || []);
 
       const score = p.riskScore ?? triage?.priorityScore ?? base.riskScore;
       return {

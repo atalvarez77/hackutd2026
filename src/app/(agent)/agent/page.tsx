@@ -14,6 +14,7 @@ import type { CustomerProfile, UrgencyLevel } from '@/types/statefarm';
 
 const TriageMap = dynamic(() => import('@/components/agent/TriageMap'), { ssr: false });
 
+
 const ROW_H = 72;
 const GRID = 'minmax(0,1.1fr) 96px minmax(0,1.1fr) 150px minmax(0,1.5fr)';
 // Events in the transcript: one accent for things that need attention, neutral otherwise.
@@ -40,17 +41,28 @@ export default function AgentConsolePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydrated]);
 
+  // A customer belongs in the live queue only if they have an active call,
+  // an active triage risk score (> 0), or incoming transcript lines
   const tier = (c: CustomerProfile): UrgencyLevel => priorityOverride[c.id] || c.urgency;
+  const activeQueueCustomers = useMemo(() => {
+    return customers.filter((x) => {
+      const hasActiveCall = callStatus[x.id] === 'ai' || callStatus[x.id] === 'agent';
+      const hasScore = (x.riskScore || 0) > 0;
+      const hasTranscript = (transcripts[x.id] || []).length > 0;
+      const hasContactReq = contactRequests.some((r) => r.custId === x.id && r.status !== 'closed');
+      return hasActiveCall || hasScore || hasTranscript || hasContactReq;
+    });
+  }, [customers, callStatus, transcripts, contactRequests]);
+
   const sorted = useMemo(
-    () => [...customers].sort((a, b) => TIER_RANK[tier(a)] - TIER_RANK[tier(b)] || b.riskScore - a.riskScore),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [customers, priorityOverride],
+    () => [...activeQueueCustomers].sort((a, b) => TIER_RANK[tier(a)] - TIER_RANK[tier(b)] || b.riskScore - a.riskScore),
+    [activeQueueCustomers, priorityOverride],
   );
   const isDraft = (id: string) => claims[id]?.status === 'draft' || claims[id]?.status === 'submitted';
   const vis = sorted.filter((c) => (filter === 'All' ? true : filter === 'High' ? tier(c) === 'High' : isDraft(c.id)));
 
   /* ---- Selected policyholder ---- */
-  const c = customers.find((x) => x.id === sel) || customers[0];
+  const c = customers.find((x) => x.id === sel) || customers[0];  
   const claim = claims[c.id];
   const takeover = !!agentTakeover[c.id];
   const cs = callStatus[c.id] || 'idle';
@@ -158,9 +170,9 @@ export default function AgentConsolePage() {
 
   const waitingReqs = contactRequests.filter((r) => r.status !== 'closed');
   const counts = {
-    All: customers.length,
-    High: customers.filter((x) => tier(x) === 'High').length,
-    Drafts: customers.filter((x) => isDraft(x.id)).length,
+    All: activeQueueCustomers.length,
+    High: activeQueueCustomers.filter((x) => tier(x) === 'High').length,
+    Drafts: activeQueueCustomers.filter((x) => isDraft(x.id)).length,
   };
 
   const factorWhy = [
@@ -283,61 +295,70 @@ export default function AgentConsolePage() {
                 <div>Latest</div>
               </div>
               <div className="flex-1 overflow-auto">
-                <div className="relative" style={{ height: vis.length * ROW_H }}>
-                  {customers.map((x) => {
-                    const r = vis.indexOf(x);
-                    const isSel = x.id === sel;
-                    const t = tier(x);
-                    const [st, stc, pulse] = callText(x);
-                    return (
-                      <div
-                        key={x.id}
-                        onClick={() => setSel(x.id)}
-                        className="absolute left-0 right-0 grid gap-4 items-center pl-5 pr-5 cursor-pointer border-b border-white/[.06] hover:bg-white/[.03]"
-                        style={{
-                          top: Math.max(r, 0) * ROW_H,
-                          height: ROW_H,
-                          opacity: r < 0 ? 0 : 1,
-                          pointerEvents: r < 0 ? 'none' : 'auto',
-                          gridTemplateColumns: GRID,
-                          background: isSel ? 'rgba(255,255,255,.05)' : 'transparent',
-                          borderLeft: `3px solid ${isSel ? '#F4F1F6' : 'transparent'}`,
-                          transition: 'top .6s ease, opacity .3s',
-                        }}
-                      >
-                        <div className="min-w-0 flex flex-col gap-0.5">
-                          <div className="font-semibold text-[16px] truncate">{x.name}</div>
-                          <div className="text-[13px] text-[#8A8494] truncate">
-                            {x.age} · {x.livesAlone ? 'lives alone' : 'with family'}
-                            {x.language === 'es' ? ' · Spanish' : ''}
+                {vis.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-64 text-mist text-[15px]">
+                    <div className="w-12 h-12 rounded-full bg-panel-2 border border-white/[.08] flex items-center justify-center mb-3 text-lg">
+                      🎧
+                    </div>
+                    <span>No active calls in triage queue</span>
+                    <span className="text-xs text-[#8A8494] mt-1">Calls will automatically appear here in real time when initiated.</span>
+                  </div>
+                ) : (
+                  <div className="relative" style={{ height: vis.length * ROW_H }}>
+                    {customers.map((x) => {
+                      const r = vis.indexOf(x);
+                      if (r < 0) return null; // Don't render invisible rows
+                      const isSel = x.id === sel;
+                      const t = tier(x);
+                      const [st, stc, pulse] = callText(x);
+                      return (
+                        <div
+                          key={x.id}
+                          onClick={() => setSel(x.id)}
+                          className="absolute left-0 right-0 grid gap-4 items-center pl-5 pr-5 cursor-pointer border-b border-white/[.06] hover:bg-white/[.03]"
+                          style={{
+                            top: r * ROW_H,
+                            height: ROW_H,
+                            gridTemplateColumns: GRID,
+                            background: isSel ? 'rgba(255,255,255,.05)' : 'transparent',
+                            borderLeft: `3px solid ${isSel ? '#F4F1F6' : 'transparent'}`,
+                            transition: 'top .6s ease',
+                          }}
+                        >
+                          <div className="min-w-0 flex flex-col gap-0.5">
+                            <div className="font-semibold text-[16px] truncate">{x.name}</div>
+                            <div className="text-[13px] text-[#8A8494] truncate">
+                              {x.age} · {x.livesAlone ? 'lives alone' : 'with family'}
+                              {x.language === 'es' ? ' · Spanish' : ''}
+                            </div>
+                          </div>
+                          <div className="flex items-baseline gap-2">
+                            <span className="font-semibold text-[15px]" style={{ color: TIER_DARK[t].fg }}>
+                              {t}
+                            </span>
+                            <span className="font-mono text-[14px] text-[#8A8494]">{x.riskScore}</span>
+                            {priorityOverride[x.id] && <span title="Set manually" className="text-[11px] text-[#8A8494]">· set</span>}
+                          </div>
+                          <div className="min-w-0 flex flex-col gap-0.5">
+                            <div className="text-[15px] text-[#D9D2DE] truncate">{x.detectedHazard}</div>
+                            {claimText(x.id) && (
+                              <div className="text-[13px] truncate" style={{ color: claims[x.id]?.status === 'submitted' ? '#F4F1F6' : '#8A8494' }}>
+                                {claimText(x.id)}
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 text-[14px] whitespace-nowrap overflow-hidden" style={{ color: stc }}>
+                            {pulse && <Dot color={stc === '#FF6B73' ? stc : '#8FC3DD'} />}
+                            {st}
+                          </div>
+                          <div className="min-w-0 text-[13px] text-[#8A8494] truncate" title={lastChange(x.id)}>
+                            {lastChange(x.id)}
                           </div>
                         </div>
-                        <div className="flex items-baseline gap-2">
-                          <span className="font-semibold text-[15px]" style={{ color: TIER_DARK[t].fg }}>
-                            {t}
-                          </span>
-                          <span className="font-mono text-[14px] text-[#8A8494]">{x.riskScore}</span>
-                          {priorityOverride[x.id] && <span title="Set manually" className="text-[11px] text-[#8A8494]">· set</span>}
-                        </div>
-                        <div className="min-w-0 flex flex-col gap-0.5">
-                          <div className="text-[15px] text-[#D9D2DE] truncate">{x.detectedHazard}</div>
-                          {claimText(x.id) && (
-                            <div className="text-[13px] truncate" style={{ color: claims[x.id]?.status === 'submitted' ? '#F4F1F6' : '#8A8494' }}>
-                              {claimText(x.id)}
-                            </div>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-2 text-[14px] whitespace-nowrap overflow-hidden" style={{ color: stc }}>
-                          {pulse && <Dot color={stc === '#FF6B73' ? stc : '#8FC3DD'} />}
-                          {st}
-                        </div>
-                        <div className="min-w-0 text-[13px] text-[#8A8494] truncate" title={lastChange(x.id)}>
-                          {lastChange(x.id)}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </>
           )}

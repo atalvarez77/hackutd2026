@@ -25,7 +25,6 @@ export const initialCustomers: CustomerProfile[] = [
     explainability: { environmentalFactorScore: 0, vulnerabilityFactorScore: 0, propertyFactorScore: 0, historyFactorScore: 0, bulletPoints: ['Awaiting check-in'], recommendedActions: ['Routine check-in'] },
     claimDraft: { id: 'D1', hazardType: 'None', estimatedLoss: 0, description: 'None', timestamp: '', status: 'none' },
     chatTranscript: [
-      { id: 'i1', sender: 'bot', text: 'Hola Sofia, nos comunicamos de State Farm para una verificación de bienestar ante la alerta climática. ¿Cómo se encuentran usted y su hogar en este momento?', timestamp: '10:00 AM' }
     ],
   },
   {
@@ -52,7 +51,6 @@ export const initialCustomers: CustomerProfile[] = [
     explainability: { environmentalFactorScore: 0, vulnerabilityFactorScore: 0, propertyFactorScore: 0, historyFactorScore: 0, bulletPoints: ['Awaiting check-in'], recommendedActions: ['Routine check-in'] },
     claimDraft: { id: 'D2', hazardType: 'None', estimatedLoss: 0, description: 'None', timestamp: '', status: 'none' },
     chatTranscript: [
-      { id: 'i2', sender: 'bot', text: 'Hello Liam, this is State Farm reaching out for a routine check-in during the severe weather event. How are you and your home holding up right now?', timestamp: '10:00 AM' }
     ],
   },
   {
@@ -79,7 +77,6 @@ export const initialCustomers: CustomerProfile[] = [
     explainability: { environmentalFactorScore: 0, vulnerabilityFactorScore: 0, propertyFactorScore: 0, historyFactorScore: 0, bulletPoints: ['Awaiting check-in'], recommendedActions: ['Routine check-in'] },
     claimDraft: { id: 'D3', hazardType: 'None', estimatedLoss: 0, description: 'None', timestamp: '', status: 'none' },
     chatTranscript: [
-      { id: 'i3', sender: 'bot', text: 'Hello Eleanor, this is State Farm reaching out for a routine check-in during the severe weather event. How are you and your home holding up right now?', timestamp: '10:00 AM' }
     ],
   },
   {
@@ -106,7 +103,6 @@ export const initialCustomers: CustomerProfile[] = [
     explainability: { environmentalFactorScore: 0, vulnerabilityFactorScore: 0, propertyFactorScore: 0, historyFactorScore: 0, bulletPoints: ['Awaiting check-in'], recommendedActions: ['Routine check-in'] },
     claimDraft: { id: 'D4', hazardType: 'None', estimatedLoss: 0, description: 'None', timestamp: '', status: 'none' },
     chatTranscript: [
-      { id: 'i4', sender: 'bot', text: 'Hello Chloe, this is State Farm reaching out for a routine check-in during the severe weather event. How are you and your home holding up right now?', timestamp: '10:00 AM' }
     ],
   },
   {
@@ -133,7 +129,6 @@ export const initialCustomers: CustomerProfile[] = [
     explainability: { environmentalFactorScore: 0, vulnerabilityFactorScore: 0, propertyFactorScore: 0, historyFactorScore: 0, bulletPoints: ['Awaiting check-in'], recommendedActions: ['Routine check-in'] },
     claimDraft: { id: 'D5', hazardType: 'None', estimatedLoss: 0, description: 'None', timestamp: '', status: 'none' },
     chatTranscript: [
-      { id: 'i5', sender: 'bot', text: 'Hello Marcus, this is State Farm reaching out for a routine check-in during the severe weather event. How are you and your home holding up right now?', timestamp: '10:00 AM' }
     ],
   },
   {
@@ -160,7 +155,6 @@ export const initialCustomers: CustomerProfile[] = [
     explainability: { environmentalFactorScore: 0, vulnerabilityFactorScore: 0, propertyFactorScore: 0, historyFactorScore: 0, bulletPoints: ['Awaiting check-in'], recommendedActions: ['Routine check-in'] },
     claimDraft: { id: 'D6', hazardType: 'None', estimatedLoss: 0, description: 'None', timestamp: '', status: 'none' },
     chatTranscript: [
-      { id: 'i6', sender: 'bot', text: 'Hola Isabella, nos comunicamos de State Farm para una verificación de bienestar ante la alerta climática. ¿Cómo se encuentran usted y su hogar en este momento?', timestamp: '10:00 AM' }
     ],
   },
 ];
