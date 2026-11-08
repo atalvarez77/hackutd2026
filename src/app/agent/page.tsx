@@ -13,7 +13,7 @@ export default function AgentDashboardPage() {
   const filtered = sorted.filter((c) => {
     if (filterUrgency === 'All') return true;
     if (filterUrgency === 'High') return c.urgency === 'High';
-    if (filterUrgency === 'Drafts') return c.claimDraft.status === 'drafted';
+    if (filterUrgency === 'Drafts') return c.claimDraft?.status === 'drafted';
     return true;
   });
 
@@ -63,7 +63,7 @@ export default function AgentDashboardPage() {
                 <td className="py-4 px-6 font-bold text-white">{c.name}</td>
                 <td className="py-4 px-6 text-red-400 text-xs">{c.detectedHazard}</td>
                 <td className="py-4 px-6">
-                  {c.claimDraft.status === 'drafted' ? <span className="text-xs bg-amber-500/20 text-amber-300 px-2 py-1 rounded">Draft</span> : <span className="text-xs text-slate-500">None</span>}
+                  {c.claimDraft?.status === 'drafted' ? <span className="text-xs bg-amber-500/20 text-amber-300 px-2 py-1 rounded">Draft</span> : <span className="text-xs text-slate-500">None</span>}
                 </td>
                 <td className="py-4 px-6 text-right">
                   <button onClick={() => setSelectedCustomerId(c.id)} className="bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-xl text-xs font-semibold inline-flex items-center gap-1">
@@ -96,9 +96,9 @@ export default function AgentDashboardPage() {
               </div>
             </div>
 
-            {selected.claimDraft.status === 'drafted' && (
+            {selected.claimDraft?.status === 'drafted' && (
               <div className="bg-amber-950/30 border border-amber-500/40 rounded-2xl p-6">
-                <h4 className="font-bold text-amber-300 text-sm mb-2"><FileText className="w-4 h-4 inline mr-2" /> Pre-Filed Claim Draft (${selected.claimDraft.estimatedLoss.toLocaleString()})</h4>
+                <h4 className="font-bold text-amber-300 text-sm mb-2"><FileText className="w-4 h-4 inline mr-2" /> Pre-Filed Claim Draft (${(selected.claimDraft?.estimatedLoss || selected.claimDraft?.estPayout || 0).toLocaleString()})</h4>
                 <button onClick={() => approveClaimDraft(selected.id)} className="w-full bg-red-600 hover:bg-red-500 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2">
                   <CheckCircle className="w-5 h-5" /> 1-Click Approve Claim & Dispatch
                 </button>
