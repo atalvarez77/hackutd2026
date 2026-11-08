@@ -12,10 +12,10 @@
   --color-grey: #474954;
   --color-blue: #286784;
   --color-void: #0E0E10;
-  --color-panel: #141417;
-  --color-panel-2: #1C1C21;
-  --color-ink: #F4F1F6;
-  --color-mist: #B9A6C9;
+  --color-panel: #15161A;
+  --color-panel-2: #202228;
+  --color-ink: #F3F4F6;
+  --color-mist: #C5C9D0;
   --color-neon-red: #FF3B47;
   --color-neon-lavender: #C9B6DA;
   --color-neon-blue: #6FB6DC;
@@ -135,8 +135,8 @@ a {
   filter: invert(1) hue-rotate(180deg) brightness(0.85) contrast(0.9) saturate(0.3);
 }
 .hn-map .leaflet-container { background: #0e0e10; font-family: var(--font-sans-base), sans-serif; }
-.hn-map .leaflet-control-attribution { background: rgba(14, 14, 16, 0.8) !important; color: #b9a6c9 !important; }
-.hn-map .leaflet-control-attribution a { color: #ff6b73 !important; }
+.hn-map .leaflet-control-attribution { background: rgba(14, 14, 16, 0.8) !important; color: #c5c9d0 !important; }
+.hn-map .leaflet-control-attribution a { color: #ef8e87 !important; }
 .hn-pin-label {
   background: #141417 !important;
   color: #fff !important;
@@ -147,7 +147,7 @@ a {
   box-shadow: none !important;
   cursor: pointer;
 }
-.hn-pin-label.is-sel { background: #f4f1f6 !important; color: #141417 !important; }
+.hn-pin-label.is-sel { background: #f3f4f6 !important; color: #141417 !important; }
 .hn-pin-label::before { display: none; }
 
 /* Reader settings on the policyholder side (toggled in the portal nav, saved per browser). */

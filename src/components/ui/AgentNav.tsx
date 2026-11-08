@@ -41,7 +41,7 @@ export function AgentNav({
   ];
 
   return (
-    <header className="flex-none bg-void border-b border-white/[.08] text-white">
+    <header className="flex-none bg-void border-b border-white/[.14] text-white">
       <div className="px-6 h-16 flex items-center gap-5">
         <Link href="/agent" className="flex items-center gap-2 no-underline flex-none">
           <Logo mode="agent" size={30} textSize={24} />
@@ -53,7 +53,7 @@ export function AgentNav({
               key={k}
               onClick={() => onView(k)}
               className="h-[38px] px-3.5 rounded-lg font-bold text-[15px] cursor-pointer flex items-center gap-2 whitespace-nowrap"
-              style={{ background: view === k ? '#1C1C21' : 'transparent', color: view === k ? '#fff' : '#B9A6C9' }}
+              style={{ background: view === k ? '#202228' : 'transparent', color: view === k ? '#fff' : '#C5C9D0' }}
             >
               {label}
               {k === 'drafts' && draftCount > 0 && (
@@ -68,18 +68,18 @@ export function AgentNav({
         </button>
         <span
           className="flex items-center gap-2 text-[13px] whitespace-nowrap"
-          style={{ color: '#B9A6C9' }}
+          style={{ color: '#C5C9D0' }}
           title={apiStatus !== 'up' ? 'FastAPI orchestrator not reachable · Nora can’t talk' : nemotron === false ? 'FastAPI is up but has no NVIDIA_API_KEY · Nora can’t talk' : 'FastAPI + Nemotron run Nora’s conversations'}
         >
-          <span className="w-2 h-2 rounded-full inline-block" style={{ background: apiStatus === 'up' && nemotron !== false ? '#8FC3DD' : apiStatus === 'checking' ? '#8A8494' : '#FF6B73' }} />
+          <span className="w-2 h-2 rounded-full inline-block" style={{ background: apiStatus === 'up' && nemotron !== false ? '#A8C4D6' : apiStatus === 'checking' ? '#A7ABB3' : '#EF8E87' }} />
           {apiStatus === 'up' ? (nemotron === false ? 'FastAPI · no Nemotron key' : 'FastAPI · Nemotron') : apiStatus === 'down' ? 'FastAPI offline' : 'FastAPI…'}
         </span>
         <span
           className="flex items-center gap-2 text-[13px] whitespace-nowrap"
-          style={{ color: '#B9A6C9' }}
+          style={{ color: '#C5C9D0' }}
           title={dbStatus === 'connected' ? 'Live on SpacetimeDB maincloud' : 'SpacetimeDB unreachable · syncing across local tabs only'}
         >
-          <span data-sync={lastSync} className="w-2 h-2 rounded-full inline-block" style={{ background: dbStatus === 'connected' ? '#8FC3DD' : '#8A8494' }} />
+          <span data-sync={lastSync} className="w-2 h-2 rounded-full inline-block" style={{ background: dbStatus === 'connected' ? '#A8C4D6' : '#A7ABB3' }} />
           {dbStatus === 'connected' ? 'Synced · SpacetimeDB' : dbStatus === 'connecting' ? 'Connecting…' : 'Synced · this browser'}
         </span>
         <label className="flex items-center gap-2 whitespace-nowrap">

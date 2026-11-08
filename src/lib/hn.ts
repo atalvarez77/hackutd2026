@@ -59,9 +59,9 @@ export const TIER_RANK: Record<UrgencyLevel, number> = { High: 0, Medium: 1, Low
 export const TIER_LIGHT: Record<UrgencyLevel, string> = { High: '#ED1D24', Medium: '#7D6F86', Low: '#286784' };
 export const TIER_DARK: Record<UrgencyLevel, { fg: string; bg: string }> = {
   // Calm palette: only High gets color; Medium/Low are neutral.
-  High: { fg: '#FF6B73', bg: 'rgba(255,59,71,.12)' },
-  Medium: { fg: '#E6E1EA', bg: 'rgba(255,255,255,.07)' },
-  Low: { fg: '#9A93A3', bg: 'transparent' },
+  High: { fg: '#EF8E87', bg: 'rgba(239,142,135,.14)' },
+  Medium: { fg: '#E4E6EA', bg: 'rgba(255,255,255,.07)' },
+  Low: { fg: '#B3B7BF', bg: 'transparent' },
 };
 
 /** Extra policy facts the designs need that aren't in mockCustomers.ts. */

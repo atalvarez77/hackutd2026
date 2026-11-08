@@ -39,12 +39,12 @@ export const STEP_KEYS = [
   ['safe', 'shut', 'heat', 'notify'],
 ];
 
-export function coverageCards(c: CustomerProfile, lang: Language = 'en') {
+export function coverageCards(c: CustomerProfile, lang: Language = 'en', simple = false) {
   const es = lang === 'es';
   return [
     { k: es ? 'PÓLIZA' : 'POLICY', v: c.policy.policyNumber, src: tx(c.policy.type, lang) },
-    { k: es ? 'VIVIENDA' : 'DWELLING', v: money(c.policy.coverageLimit), src: es ? 'Cobertura A' : 'Coverage A' },
-    { k: es ? 'DEDUCIBLE' : 'DEDUCTIBLE', v: money(c.policy.deductible), src: es ? 'Página de declaraciones' : 'Declarations page' },
+    { k: es ? 'VIVIENDA' : 'DWELLING', v: money(c.policy.coverageLimit), src: simple ? (es ? 'lo que pagamos para reparar su casa' : 'what we pay to fix your home') : es ? 'Cobertura A' : 'Coverage A' },
+    { k: es ? 'DEDUCIBLE' : 'DEDUCTIBLE', v: money(c.policy.deductible), src: simple ? (es ? 'la parte que usted paga primero' : 'the part you pay first') : es ? 'Página de declaraciones' : 'Declarations page' },
     { k: es ? 'RESPALDO DE AGUA' : 'WATER BACKUP', v: tx(WATER_BACKUP[c.id], lang), src: es ? 'Endoso' : 'Endorsement' },
   ];
 }

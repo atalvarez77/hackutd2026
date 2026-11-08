@@ -49,7 +49,7 @@ export function ClaimEditor({ claim, onSave, onCancel }: { claim: ClaimFlow; onS
           aria-describedby={amountOk ? undefined : 'claim-amount-error'}
         />
         {!amountOk && (
-          <span id="claim-amount-error" className="text-[13px] text-[#FF6B73]">
+          <span id="claim-amount-error" className="text-[13px] text-[#EF8E87]">
             Enter a number, e.g. 3500
           </span>
         )}

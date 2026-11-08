@@ -20,7 +20,7 @@ export function claimChipFor(c?: ClaimFlow) {
 export function ClaimChip({ claim, dark = false }: { claim?: ClaimFlow; dark?: boolean }) {
   const { label, key } = claimChipFor(claim);
   const colors = dark
-    ? { none: ['transparent', '#8A8494'], draft: ['rgba(255,255,255,.07)', '#E6E1EA'], approved: ['transparent', '#8FC3DD'] }
+    ? { none: ['transparent', '#A7ABB3'], draft: ['rgba(255,255,255,.07)', '#E4E6EA'], approved: ['transparent', '#A8C4D6'] }
     : { none: ['transparent', '#474954'], draft: ['#7D6F86', '#fff'], approved: ['#286784', '#fff'] };
   const [bg, fg] = colors[key];
   return (

@@ -6,7 +6,7 @@ import { CircleMarker, MapContainer, TileLayer, Tooltip } from 'react-leaflet';
 import type { CustomerProfile, UrgencyLevel } from '@/types/statefarm';
 import { COORDS } from '@/lib/hn';
 
-const C: Record<UrgencyLevel, string> = { High: '#FF3B47', Medium: '#9A93A3', Low: '#4E5A66' };
+const C: Record<UrgencyLevel, string> = { High: '#E0605A', Medium: '#B3B7BF', Low: '#4E5A66' };
 const N = 2412;
 
 /** Deterministic fake policyholder locations across DFW. */
@@ -89,7 +89,7 @@ export default function TriageMap({
               center={COORDS[c.id] ?? [32.8, -96.8]}
               radius={on ? 11 : 9}
               bubblingMouseEvents={false}
-              pathOptions={{ color: on ? '#F4F1F6' : '#141417', weight: on ? 3 : 2, fillColor: C[tierOf(c)], fillOpacity: 1 }}
+              pathOptions={{ color: on ? '#F3F4F6' : '#141417', weight: on ? 3 : 2, fillColor: C[tierOf(c)], fillOpacity: 1 }}
               eventHandlers={{ click: () => pick(c.id) }}
             >
               <Tooltip permanent interactive direction="right" offset={[10, 0]} className={`hn-pin-label${on ? ' is-sel' : ''}`} eventHandlers={{ click: () => pick(c.id) }}>
@@ -102,8 +102,8 @@ export default function TriageMap({
 
       <div className="absolute z-[500] left-4 top-4 flex gap-2.5 pointer-events-none">
         {[
-          { n: shown.toLocaleString(), l: 'policyholders in the zone', c: '#F4F1F6' },
-          { n: String(hi), l: 'high urgency', c: '#FF6B73' },
+          { n: shown.toLocaleString(), l: 'policyholders in the zone', c: '#F3F4F6' },
+          { n: String(hi), l: 'high urgency', c: '#EF8E87' },
         ].map((k) => (
           <div key={k.l} className="bg-panel/90 border border-white/10 rounded-[10px] px-3.5 py-2.5 text-white flex flex-col">
             <span className="font-semibold text-[24px] leading-tight" style={{ color: k.c }}>

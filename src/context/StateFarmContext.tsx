@@ -14,6 +14,7 @@ import type {
   UrgencyLevel,
 } from '@/types/statefarm';
 import { first, hazardFor, nowTime, WATER_BACKUP } from '@/lib/hn';
+import { readPrefs } from '@/lib/reader';
 import { DbConnection } from '@/module_bindings';
 import type { ActiveCall, Claim, Customer, Policy, TriageQueue } from '@/module_bindings/types';
 import { apiState, checkHealth, onApiChange, post, postRaw, type ApiStatus, type NoraAction, type TurnFailure, type TurnResult } from '@/lib/backend';
@@ -616,6 +617,10 @@ const session = (custId: string) => {
       water_backup_endorsement: WATER_BACKUP[custId] || 'unknown',
       emergency_contact: `${who.emergencyContact.name} (${who.emergencyContact.relationship}, ${who.emergencyContact.phone})`,
       prior_claims: who.claimsHistory.map((h) => `${h.date.slice(0, 4)} ${h.type}`).join('; ') || 'none',
+      // "Easier words" in the portal: read when the turn is sent, so it applies from the next thing Nora says.
+      ...(readPrefs().simple
+        ? { communication_preference: 'Prefers simple, everyday words and short sentences. Explain any insurance term (deductible, adjuster, coverage) in plain language.' }
+        : {}),
     };
   };
 

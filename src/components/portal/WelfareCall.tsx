@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from '@/context/StateFarmContext';
 import { NORA_PHONE, first } from '@/lib/hn';
+import { tx } from '@/lib/i18n';
 import type { Language } from '@/types/statefarm';
 import type { TurnFailure, TurnResult } from '@/lib/backend';
 import { pickVoice, warmVoices, type Speaker } from '@/lib/voice';
@@ -66,6 +67,9 @@ export function WelfareCall() {
   const [suggestions, setSuggestions] = useState<string[]>([]);
   /** Shown when Nora couldn't answer (orchestrator down or Nemotron unavailable). */
   const [notice, setNotice] = useState<string | null>(null);
+  /** Live captions on the phone screen (on by default; the "captions" button toggles them). */
+  const [cc, setCc] = useState(true);
+  const [caption, setCaption] = useState<{ who: 'nora' | 'agent' | 'you'; text: string } | null>(null);
   const recRef = useRef<Recognition | null>(null);
   const busy = useRef(false);
   const spokenAgent = useRef<Set<string>>(new Set());
@@ -100,6 +104,7 @@ export function WelfareCall() {
 
   const speak = (text: string, lang: Language, after?: () => void, who: Speaker = 'nora') => {
     setSpeaking(true);
+    setCaption({ who, text });
     let finished = false;
     const done = () => {
       if (finished) return;
@@ -228,6 +233,7 @@ export function WelfareCall() {
   /** Something the caller said (voice, a suggestion, or typed). */
   const say = (text: string) => {
     if (!text.trim() || !live) return;
+    setCaption({ who: 'you', text: text.trim() });
     void exchange(() => store.customerTurn(c.id, { text: text.trim() }, 'call'));
   };
 
@@ -339,9 +345,20 @@ export function WelfareCall() {
 
         {ringing && (
           <div className="absolute inset-0 top-12 flex flex-col items-center px-6 pb-14">
-            <span className="mt-16 text-[17px] text-white/70">{T('mobile', 'celular')}</span>
-            <span className="mt-1 text-[38px] font-normal leading-tight text-center">State Farm</span>
+            <span className="mt-8 w-[76px] h-[76px] rounded-full bg-[#E61A21] flex items-center justify-center text-[26px] font-bold tracking-tight" aria-hidden>
+              SF
+            </span>
+            <span className="mt-3 text-[38px] font-normal leading-tight text-center">State Farm</span>
+            <span className="mt-1 flex items-center gap-1.5 text-[15px] font-semibold text-[#7EE2A8]">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+                <path d="M12 2 4 5v6c0 5 3.4 9.3 8 11 4.6-1.7 8-6 8-11V5l-8-3zm-1.2 14.2-3.5-3.5 1.4-1.4 2.1 2.1 4.8-4.8 1.4 1.4-6.2 6.2z" />
+              </svg>
+              {T('Verified caller', 'Llamada verificada')}
+            </span>
             <span className="text-[17px] text-white/70">{NORA_PHONE}</span>
+            <span className="mt-4 max-w-[280px] text-center text-[16px] leading-snug text-white/90">
+              {T('Calling about', 'Llamada por')}: {tx(c.weatherAlert.title, c.language)} · {c.city}
+            </span>
             <div className="mt-auto w-full flex justify-between px-6 text-[13px] text-white/90">
               <span className="flex flex-col items-center gap-1.5">
                 <Glyph d="M12 7v5l3 2M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z" />
@@ -364,7 +381,19 @@ export function WelfareCall() {
             <span className="mt-10 text-[34px] font-normal leading-tight text-center">{keypad && digits ? digits : callerName}</span>
             <span className="text-[17px] text-white/70">{keypad && digits ? callerName : clock}</span>
 
-            <div className="mt-auto w-full">
+            {/* Live captions (aria-hidden: the transcript panel already announces every line). */}
+            <div className="flex-1 min-h-0 w-full flex items-center justify-center py-3" aria-hidden>
+              {cc && !keypad && caption && (
+                <div key={caption.text} className="w-full rounded-2xl bg-black/45 px-4 py-3 hn-in">
+                  <span className="block text-[13px] font-semibold text-white/70">
+                    {caption.who === 'nora' ? 'Nora' : caption.who === 'agent' ? 'Jordan' : T('You', 'Usted')}
+                  </span>
+                  <span className="block text-[20px] leading-snug line-clamp-5">{caption.text}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="w-full">
               {keypad ? (
                 <div className="grid grid-cols-3 gap-x-6 gap-y-3.5 justify-items-center">
                   {[
@@ -395,7 +424,7 @@ export function WelfareCall() {
                     d="M4 10v4h4l5 4V6L8 10zM16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"
                   />
                   <Control label={conf ? T('in call', 'en llamada') : T('add call', 'agregar')} on={conf} onClick={addCall} d="M12 5v14M5 12h14" />
-                  <Control label="FaceTime" d="M3 7h12v10H3zM15 10l6-3v10l-6-3" dim />
+                  <Control label={T('captions', 'subtítulos')} on={cc} onClick={() => setCc(!cc)} d="M3 5h18v14H3zM10 10.5a2 2 0 1 0 0 3M17 10.5a2 2 0 1 0 0 3" />
                   <Control label={T('messages', 'mensajes')} onClick={() => setMsgOpen(true)} d="M4 5h16v11H8l-4 4z" />
                 </div>
               )}
