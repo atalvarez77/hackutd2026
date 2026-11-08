@@ -15,11 +15,16 @@ load_dotenv()
 # with "stub" she keeps her scripted lines and only uses the triage/claim data.
 import re
 
-AI_SOURCE = "nemotron"
 try:
-    from nemotron_service import process_disaster_turn
+    import nemotron_service  # real Nemotron via NVIDIA NIM (needs NVIDIA_API_KEY)
+
+    NEMOTRON_ENABLED = nemotron_service.ENABLED
 except ImportError:
-    AI_SOURCE = "stub"
+    nemotron_service = None  # type: ignore[assignment]
+    NEMOTRON_ENABLED = False
+AI_SOURCE = "nemotron" if NEMOTRON_ENABLED else "stub"
+
+if True:  # keyword stub: used without a key, and for any turn where Nemotron fails
 
     _NO_HARM = re.compile(
         r"\b(no|without|zero)\s+(damage|problems?|issues?)\b|nothing('?s| is)?\s+(wrong|damaged|broken)|\ball good\b"
@@ -40,7 +45,7 @@ except ImportError:
         (r"damage|broke|crack|collaps|daño|dañad|roto|rota", "Reported property damage", "Property damage", "Property damage", 2500.0, 75),
     ]
 
-    async def process_disaster_turn(customer_id: int, user_transcript: str, stage: Optional[str] = None) -> dict:
+    async def stub_turn(customer_id: int, user_transcript: str, stage: Optional[str] = None) -> dict:
         text = user_transcript or ""
         harmless = bool(_NO_HARM.search(text))
         kind = None if harmless else next((k for k in _KINDS if re.search(k[0], text, re.I)), None)
@@ -72,11 +77,16 @@ except ImportError:
         return out
 
 
-async def run_turn(customer_id: int, text: str, stage: Optional[str]) -> dict:
-    if AI_SOURCE == "stub":
-        return await process_disaster_turn(customer_id, text, stage)  # type: ignore[call-arg]
-    return await process_disaster_turn(customer_id, text)
-
+async def run_turn(
+    customer_id: int, text: str, stage: Optional[str], lang: str = "en", profile: Optional[Dict[str, Any]] = None
+) -> Tuple[dict, str]:
+    """Returns (result, source). Real Nemotron when configured; the stub otherwise or if it fails."""
+    if NEMOTRON_ENABLED and nemotron_service is not None:
+        try:
+            return await nemotron_service.process_disaster_turn(customer_id, text, stage=stage, lang=lang, profile=profile), "nemotron"
+        except Exception as e:
+            print(f"[Nemotron failed, using stub for this turn] {e}")
+    return await stub_turn(customer_id, text, stage), "stub"
 
 app = FastAPI(title="State Farm Disaster Triage Orchestrator")
 
@@ -102,6 +112,9 @@ class ChatRequest(BaseModel):
     stage: Optional[str] = None
     # True when the frontend speaks its own scripted line; then the stub reply isn't written to the transcript.
     scripted: bool = False
+    # Caller's language and a short profile (name, age, alert, policy...) for Nemotron's prompt.
+    lang: str = "en"
+    profile: Optional[Dict[str, Any]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -254,10 +267,10 @@ async def chat_turn(req: ChatRequest, background_tasks: BackgroundTasks):
             client, req.customer_id, req.call_id, req.ticket_id, req.claim_id
         )
 
-    ai_data = await run_turn(req.customer_id, req.user_transcript, req.stage)
+    ai_data, source = await run_turn(req.customer_id, req.user_transcript, req.stage, req.lang, req.profile)
     voice_reply = ai_data.get("voice_reply", "I have logged your update.")
     # A scripted frontend speaks (and logs) its own line; don't put the stub's reply in the transcript.
-    logged_reply = None if (req.scripted and AI_SOURCE == "stub") else voice_reply
+    logged_reply = None if (req.scripted and source == "stub") else voice_reply
 
     background_tasks.add_task(
         sync_all_reducers, call_id, ticket_id, claim_id, policy_id, req.customer_id, req.user_transcript, logged_reply, ai_data
@@ -267,7 +280,7 @@ async def chat_turn(req: ChatRequest, background_tasks: BackgroundTasks):
     return {
         "reply": voice_reply,
         "bot_reply": voice_reply,
-        "ai_source": AI_SOURCE,
+        "ai_source": source,
         "reply_logged": logged_reply is not None,
         "call_id": call_id,
         "ticket_id": ticket_id,

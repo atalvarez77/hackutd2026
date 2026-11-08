@@ -595,8 +595,21 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const customerTurn: Ctx['customerTurn'] = async (custId, text, opts) => {
     // Logged locally now; the orchestrator writes it to the transcript as part of the turn.
     appendLine(custId, { kind: 'cust', text, channel: opts.channel, tr: opts.tr }, { synced: true });
+    // Context for Nemotron's prompt.
+    const who = cust(custId);
+    const profile = {
+      name: who.name,
+      age: who.age,
+      lives_alone: who.livesAlone,
+      city: who.city,
+      address: who.address,
+      alert: `${who.weatherAlert.title}: ${who.weatherAlert.description}`,
+      policy_type: who.policy.type,
+      deductible: who.policy.deductible,
+      emergency_contact: `${who.emergencyContact.name} (${who.emergencyContact.relationship})`,
+    };
     const turn = await queued(custId, () =>
-      post<TurnResult>('/api/chat', { ...ref(custId), user_transcript: text, stage: opts.stage, scripted: true }, 9000),
+      post<TurnResult>('/api/chat', { ...ref(custId), user_transcript: text, stage: opts.stage, scripted: true, lang: who.language, profile }, 25000),
     );
     if (!turn) {
       // Orchestrator unreachable: write the caller's line ourselves.

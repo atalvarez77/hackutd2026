@@ -339,7 +339,8 @@ export function WelfareCall() {
     const hazardNow = turn?.claim ? turn.detected_hazard || c.detectedHazard : hazard ? hazardFor(c, text).hazard : c.detectedHazard;
     const L = lines(c, hazardNow, turn?.claim?.hazard_type || claim?.type || '');
     // With real Nemotron behind the orchestrator Nora speaks its reply; with its stub, her script.
-    const ai = turn?.ai_source === 'nemotron' && turn.reply ? turn : null;
+    // The submit step keeps the scripted line because it carries the real claim number.
+    const ai = turn?.ai_source === 'nemotron' && turn.reply && atStage !== 'coverage' ? turn : null;
     const respond = (p: Pair, after?: () => void) => (ai ? say({ en: ai.reply, es: ai.reply }, after, c.language, ai.reply_logged) : say(p, after));
 
     if (PERSON_RE.test(text) && atStage !== 'transfer') return transfer('');
