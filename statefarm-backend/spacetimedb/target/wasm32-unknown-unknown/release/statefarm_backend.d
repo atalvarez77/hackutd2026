@@ -1,1 +1,0 @@
-/Users/a2macpro/Desktop/Coding\ Projects/HackUTD\ 26/hackutd2026/statefarm-backend/spacetimedb/target/wasm32-unknown-unknown/release/statefarm_backend.wasm: /Users/a2macpro/Desktop/Coding\ Projects/HackUTD\ 26/hackutd2026/statefarm-backend/spacetimedb/src/lib.rs

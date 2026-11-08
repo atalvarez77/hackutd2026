@@ -1,57 +1,104 @@
 @import "tailwindcss";
 
-:root {
-  --background: #f8fafc;
-  --foreground: #0f172a;
-  --sf-red: #D3122A;
-  --sf-red-dark: #9F0B1E;
-  --sf-red-light: #FEECEE;
+@theme {
+  --color-sf-red: #ED1D24;
+  --color-charcoal: #1A1A1A;
+  --color-petal: #EFD9CE;
+  --color-petal-50: #F6E9E2;
+  --color-petal-25: #FBF6F3;
+  --color-lavender: #7D6F86;
+  --color-grey: #474954;
+  --color-blue: #286784;
+  --color-void: #0E0E10;
+  --color-panel: #141417;
+  --color-panel-2: #1C1C21;
+  --color-ink: #F4F1F6;
+  --color-mist: #B9A6C9;
+  --color-neon-red: #FF3B47;
+  --color-neon-lavender: #C9B6DA;
+  --color-neon-blue: #6FB6DC;
+  --color-disabled: #C7BFCC;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-sf-red: var(--sf-red);
-  --color-sf-red-dark: var(--sf-red-dark);
-  --color-sf-red-light: var(--sf-red-light);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-display: var(--font-kanit), sans-serif;
+  --font-sans: var(--font-jakarta), sans-serif;
+  --font-mono: var(--font-space-mono), monospace;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+  background: #ffffff;
+  color: #1a1a1a;
+  font-family: var(--font-jakarta), sans-serif;
 }
 
-/* Custom animations for voice call wave and radar pulse */
-@keyframes pulse-ring {
-  0% {
-    transform: scale(0.95);
-    opacity: 0.8;
-  }
-  50% {
-    transform: scale(1.15);
-    opacity: 0.3;
-  }
-  100% {
-    transform: scale(0.95);
-    opacity: 0.8;
-  }
+a {
+  color: inherit;
 }
 
-.animate-pulse-ring {
-  animation: pulse-ring 2.5s infinite ease-in-out;
+/* Small uppercase eyebrow labels (Jakarta 800, tracked) */
+.hn-label {
+  font-family: var(--font-jakarta), sans-serif;
+  font-weight: 800;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
-@keyframes wave {
-  0%, 100% { height: 8px; }
-  50% { height: 36px; }
+/* Horizontal-scroll tab rows on small screens */
+.hn-scroll-x {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.hn-scroll-x::-webkit-scrollbar {
+  display: none;
 }
 
-.animate-wave-1 { animation: wave 1.2s infinite ease-in-out; }
-.animate-wave-2 { animation: wave 0.9s infinite ease-in-out 0.2s; }
-.animate-wave-3 { animation: wave 1.5s infinite ease-in-out 0.4s; }
-.animate-wave-4 { animation: wave 1.0s infinite ease-in-out 0.1s; }
-.animate-wave-5 { animation: wave 1.3s infinite ease-in-out 0.3s; }
+@keyframes hnWave {
+  0%, 100% { transform: scaleY(0.35); }
+  50% { transform: scaleY(1); }
+}
+@keyframes hnIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes hnRing {
+  0% { box-shadow: 0 0 0 0 rgba(237, 29, 36, 0.45); }
+  100% { box-shadow: 0 0 0 22px rgba(237, 29, 36, 0); }
+}
+@keyframes hnGlow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(237, 29, 36, 0.5); }
+  50% { box-shadow: 0 0 18px 2px rgba(237, 29, 36, 0.45); }
+}
+@keyframes hnPulse {
+  0% { box-shadow: 0 0 0 0 var(--pc, #ff3b47); }
+  70% { box-shadow: 0 0 0 6px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.hn-in { animation: hnIn 0.3s ease-out; }
+@keyframes hnFlash {
+  0% { background: rgba(185, 166, 201, 0.28); }
+  100% { background: transparent; }
+}
+@keyframes hnSync {
+  0%, 85% { background: #ff3b47; box-shadow: 0 0 8px #ff3b47; }
+  100% { background: #6fb6dc; }
+}
 
+/* Dark Leaflet tiles for the agent map */
+.hn-map .leaflet-tile-pane {
+  filter: invert(1) hue-rotate(180deg) brightness(0.85) contrast(0.9) saturate(0.3);
+}
+.hn-map .leaflet-container { background: #0e0e10; font-family: var(--font-jakarta), sans-serif; }
+.hn-map .leaflet-control-attribution { background: rgba(14, 14, 16, 0.8) !important; color: #b9a6c9 !important; }
+.hn-map .leaflet-control-attribution a { color: #ff6b73 !important; }
+.hn-pin-label {
+  background: #141417 !important;
+  color: #fff !important;
+  border: 1px solid #ff3b47 !important;
+  border-radius: 8px !important;
+  font-weight: 700;
+  font-size: 12px;
+  box-shadow: 0 0 12px rgba(255, 59, 71, 0.4) !important;
+}
+.hn-pin-label::before { display: none; }
