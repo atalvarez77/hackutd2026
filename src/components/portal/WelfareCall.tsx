@@ -144,7 +144,7 @@ function tone(k: string) {
 
 export function WelfareCall() {
   const store = useStore();
-  const { activeCustomer: c, callStatus, transcripts, claims, contactRequests, agentTakeover } = store;
+  const { activeCustomer: c, callStatus, transcripts, claims, contactRequests, agentTakeover, demo } = store;
   const es = c.language === 'es';
   const status = callStatus[c.id] || 'idle';
   const [stage, setStage] = useState<Stage>('greet');
@@ -162,6 +162,11 @@ export function WelfareCall() {
   const spokenAgent = useRef<Set<string>>(new Set());
   const lastSaid = useRef<Pair | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [conf, setConf] = useState(false);
+  const [texts, setTexts] = useState<{ id: number; text: string }[]>([]);
+  const [banner, setBanner] = useState<number | null>(null);
+  const [msgOpen, setMsgOpen] = useState(false);
+  const demoDone = useRef<Set<string>>(new Set());
 
   const claim = claims[c.id];
   const req = contactRequests.find((r) => r.custId === c.id && r.status !== 'closed');
@@ -246,6 +251,8 @@ export function WelfareCall() {
     setNow(t);
     setDigits('');
     setKeypad(false);
+    setConf(false);
+    demoDone.current = new Set();
     store.setCallStatus(c.id, 'ai');
     store.appendLine(c.id, { kind: 'event', text: 'Welfare call connected · Nora on the line', dot: 'red' });
     setStage('greet');
@@ -265,13 +272,47 @@ export function WelfareCall() {
 
   const confirm = (keys: string[], source = ON_CALL) => keys.forEach((k) => store.confirmClaimField(c.id, k, source));
 
+  /** Nora texts the policyholder (shows as an iPhone notification, kept in Messages). */
+  const sms = (p: Pair, lang: Language = c.language) => {
+    const body = lang === 'es' ? p.es : p.en;
+    const id = clockNow();
+    setTexts((t) => [...t, { id, text: body }]);
+    setBanner(id);
+    setTimeout(() => setBanner((b) => (b === id ? null : b)), 7000);
+    store.appendLine(c.id, { kind: 'event', text: `SMS to policyholder: “${p.en}”`, dot: 'blue' });
+  };
+
+  /** "add call": conference in the emergency contact so they hear it too. */
+  const addCall = () => {
+    if (!live || conf) return;
+    const ec = c.emergencyContact;
+    setConf(true);
+    store.appendLine(c.id, { kind: 'event', text: `${ec.name} (${ec.relationship}) added to the call`, dot: 'blue' });
+    if (!takeover)
+      say({
+        en: `I’ve added ${first(ec.name)} to the call so they can hear this too. Hi ${first(ec.name)}, this is Nora from State Farm.`,
+        es: `Agregué a ${first(ec.name)} a la llamada para que también escuche. Hola ${first(ec.name)}, le habla Nora de State Farm.`,
+      });
+  };
+
   const transfer = (via: string) => {
     if (stage === 'transfer' || takeover) return;
     const L = lines(c, c.detectedHazard, claim?.type || '');
     say(L.transfer);
+    sms({ en: 'State Farm: Connecting you to Jordan, a State Farm agent. Stay on the line.', es: 'State Farm: Le comunicamos con Jordan, agente de State Farm. No cuelgue.' });
     store.createContactRequest(c.id, 'call', (c.detectedHazard === 'None' ? 'General question' : c.detectedHazard) + via, true);
     setStage('transfer');
   };
+
+  const textSafety = () =>
+    sms(
+      isWaterHazard(c.detectedHazard + ' ' + (claim?.type || ''))
+        ? {
+            en: 'State Farm: To shut off your water, find the round main valve where the line enters the house (garage or near the street) and turn it clockwise until it stops.',
+            es: 'State Farm: Para cerrar el agua, busque la válvula principal redonda donde entra la línea a la casa (garaje o cerca de la calle) y gírela a la derecha hasta que se detenga.',
+          }
+        : { en: 'State Farm: Stay away from the damaged area. If you smell gas or see sparks, leave and call 911.', es: 'State Farm: Manténgase lejos del área dañada. Si huele a gas o ve chispas, salga y llame al 911.' },
+    );
 
   /** One customer reply, from voice, a chip or typing. */
   const reply = (text: string) => {
@@ -304,6 +345,7 @@ export function WelfareCall() {
           confirm(['type', 'when', 'where', 'quote']);
           say(L.safety);
           setStage('safety');
+          textSafety();
         }
         break;
       case 'fix':
@@ -311,6 +353,7 @@ export function WelfareCall() {
         confirm(['type', 'when', 'where', 'quote'], 'Corrected on call');
         say(L.safety);
         setStage('safety');
+        textSafety();
         break;
       case 'safety':
         confirm(['safe', 'shut', 'heat', 'notify']);
@@ -329,6 +372,10 @@ export function WelfareCall() {
           const num = store.submitClaim(c.id);
           say(L.submitted(num));
           setStage('submitted');
+          sms({
+            en: `State Farm: Claim ${num} received. An adjuster will contact you within 24 hours. Reply HELP for a person.`,
+            es: `State Farm: Recibimos su reclamo ${num}. Un ajustador le contactará en 24 horas. Responda AYUDA para hablar con una persona.`,
+          });
         }
         break;
       case 'submitted':
@@ -402,12 +449,40 @@ export function WelfareCall() {
     rec.start();
   };
 
+  /* ---- Guided demo: answer the call and play Sofia's side by itself ---- */
+  const ringingNow = status === 'ringing' || status === 'idle';
+  useEffect(() => {
+    if (!demo?.on) return;
+    if (ringingNow) {
+      const t = setTimeout(accept, 3000);
+      return () => clearTimeout(t);
+    }
+    if (!live || speaking) return;
+    const last = callLines[callLines.length - 1];
+    const key = takeover ? (last?.kind === 'agent' ? 'thanks:' + last.id : '') : stage + (conf ? '+c' : '');
+    if (!key || demoDone.current.has(key)) return;
+    const t = setTimeout(() => {
+      demoDone.current.add(key);
+      if (takeover) return reply(es ? CHIPS.transfer(c)[1].es : CHIPS.transfer(c)[1].en);
+      if (stage === 'safety' && !conf) return addCall();
+      if (stage === 'submitted') {
+        setKeypad(true);
+        setTimeout(() => press('1'), 1100);
+        return;
+      }
+      if (stage === 'transfer' || stage === 'closing') return;
+      const chip = CHIPS[stage](c)[0];
+      reply(es ? chip.es : chip.en);
+    }, 1800);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [demo?.on, ringingNow, live, speaking, stage, conf, takeover, callLines.length]);
+
   const T = (en: string, sp: string) => (es ? sp : en);
   const secs = startedAt && now ? Math.max(0, Math.floor((now - startedAt) / 1000)) : null;
   const clock = secs === null ? '0:00' : `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
   const ringing = status === 'ringing' || status === 'idle';
-  const claimNo = claim && (claim.status === 'submitted' || claim.status === 'approved') && callLines.length > 0 ? claim.number : undefined;
-  const callerName = takeover ? 'Jordan · State Farm' : 'State Farm';
+  const callerName = (takeover ? 'Jordan · State Farm' : 'State Farm') + (conf ? ` & ${first(c.emergencyContact.name)}` : '');
 
   return (
     <div id="call" className="grid gap-6 items-stretch grid-cols-1 lg:grid-cols-[360px_minmax(0,1fr)] scroll-mt-[110px]">
@@ -426,22 +501,44 @@ export function WelfareCall() {
           </span>
         </div>
 
-        {claimNo && (
-          <div className="absolute left-2.5 right-2.5 top-12 z-10 rounded-[22px] bg-[#F2F2F7]/95 text-black px-3.5 py-3 flex gap-3 items-start shadow-lg hn-in">
-            <span className="w-9 h-9 rounded-[9px] bg-[#34C759] flex items-center justify-center flex-none">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="#fff" aria-hidden>
-                <path d="M12 3C6.5 3 2 6.6 2 11c0 2.4 1.3 4.6 3.4 6.1L4.5 21l4.2-2.3c1 .3 2.1.4 3.3.4 5.5 0 10-3.6 10-8S17.5 3 12 3z" />
-              </svg>
-            </span>
+        {banner !== null && !msgOpen && texts.some((m) => m.id === banner) && (
+          <button
+            onClick={() => {
+              setMsgOpen(true);
+              setBanner(null);
+            }}
+            className="absolute left-2.5 right-2.5 top-12 z-20 rounded-[22px] bg-[#F2F2F7]/95 text-black text-left px-3.5 py-3 flex gap-3 items-start shadow-lg border-0 cursor-pointer hn-in"
+          >
+            <MsgIcon />
             <span className="flex-1 min-w-0 flex flex-col">
               <span className="flex justify-between text-[14px]">
                 <span className="font-semibold">State Farm</span>
                 <span className="text-black/45">{T('now', 'ahora')}</span>
               </span>
-              <span className="text-[14px] leading-snug">
-                {T(`Claim ${claimNo} received. An adjuster will contact you within 24h.`, `Recibimos su reclamo ${claimNo}. Un ajustador le contactará en 24h.`)}
-              </span>
+              <span className="text-[14px] leading-snug line-clamp-3">{texts.find((m) => m.id === banner)?.text}</span>
             </span>
+          </button>
+        )}
+
+        {msgOpen && (
+          <div className="absolute inset-0 top-11 z-30 bg-white text-black flex flex-col">
+            <div className="px-3 py-2 border-b border-black/10 grid grid-cols-[80px_1fr_80px] items-center">
+              <button onClick={() => setMsgOpen(false)} className="justify-self-start bg-transparent border-0 text-[#007AFF] text-[17px] cursor-pointer">
+                ‹ {live ? T('Call', 'Llamada') : T('Back', 'Atrás')}
+              </button>
+              <span className="flex flex-col items-center">
+                <span className="w-10 h-10 rounded-full bg-[#ED1D24] text-white flex items-center justify-center font-semibold">SF</span>
+                <span className="text-[12px]">State Farm</span>
+              </span>
+            </div>
+            <div className="flex-1 overflow-y-auto px-3 py-4 flex flex-col gap-2">
+              <span className="self-center text-[12px] text-black/45">{T('Text Message · Today', 'Mensaje de texto · Hoy')}</span>
+              {texts.map((m) => (
+                <span key={m.id} className="self-start max-w-[80%] px-3.5 py-2 rounded-[18px] bg-[#E9E9EB] text-[16px] leading-snug">
+                  {m.text}
+                </span>
+              ))}
+            </div>
           </div>
         )}
 
@@ -502,9 +599,9 @@ export function WelfareCall() {
                     }}
                     d="M4 10v4h4l5 4V6L8 10zM16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"
                   />
-                  <Control label={T('add call', 'agregar')} d="M12 5v14M5 12h14" dim />
+                  <Control label={conf ? T('in call', 'en llamada') : T('add call', 'agregar')} on={conf} onClick={addCall} d="M12 5v14M5 12h14" />
                   <Control label="FaceTime" d="M3 7h12v10H3zM15 10l6-3v10l-6-3" dim />
-                  <Control label={T('contacts', 'contactos')} d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21c0-4 3.6-6 8-6s8 2 8 6" dim />
+                  <Control label={T('messages', 'mensajes')} onClick={() => setMsgOpen(true)} d="M4 5h16v11H8l-4 4z" />
                 </div>
               )}
             </div>
@@ -530,6 +627,11 @@ export function WelfareCall() {
             </span>
             <span className="mt-1 text-[38px] font-normal leading-tight">State Farm</span>
             <span className="text-[17px] text-white/70">{NORA_PHONE}</span>
+            {texts.length > 0 && (
+              <button onClick={() => setMsgOpen(true)} className="mt-8 h-11 px-5 rounded-full bg-white/20 border-0 text-white text-[16px] cursor-pointer">
+                {T(`Messages (${texts.length})`, `Mensajes (${texts.length})`)}
+              </button>
+            )}
             <div className="mt-auto">
               <CallButton color="#34C759" label={T('Call back', 'Volver a llamar')} onClick={() => store.setCallStatus(c.id, 'ringing')} />
             </div>
@@ -541,6 +643,8 @@ export function WelfareCall() {
       <section className="lg:h-[720px] min-h-[420px] rounded-2xl border border-line bg-white flex flex-col overflow-hidden">
         <header className="px-5 py-4 border-b border-line flex items-center gap-3 flex-wrap">
           <span className="font-semibold text-[20px]">{T('Call transcript', 'Transcripción de la llamada')}</span>
+          {conf && <span className="text-[14px] text-grey">{T(`${c.emergencyContact.name} is on the call`, `${c.emergencyContact.name} está en la llamada`)}</span>}
+          {demo?.on && <span className="ml-auto text-[13px] px-2 py-0.5 rounded-md bg-petal text-charcoal">{T('Guided demo playing', 'Demo guiada en curso')}</span>}
           <span className="flex items-center gap-2 text-[15px] text-grey">
             {live && <span className="w-2 h-2 rounded-full bg-sf-red" />}
             {!live
@@ -640,6 +744,16 @@ export function WelfareCall() {
         </footer>
       </section>
     </div>
+  );
+}
+
+function MsgIcon() {
+  return (
+    <span className="w-9 h-9 rounded-[9px] bg-[#34C759] flex items-center justify-center flex-none">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="#fff" aria-hidden>
+        <path d="M12 3C6.5 3 2 6.6 2 11c0 2.4 1.3 4.6 3.4 6.1L4.5 21l4.2-2.3c1 .3 2.1.4 3.3.4 5.5 0 10-3.6 10-8S17.5 3 12 3z" />
+      </svg>
+    </span>
   );
 }
 

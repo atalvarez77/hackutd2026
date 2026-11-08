@@ -10,13 +10,14 @@ import { StreamText } from '@/components/ui/StreamText';
 import { ClaimChip } from '@/components/ui/Chips';
 import type { Line } from '@/types/statefarm';
 import { SIM, simTrace } from '@/components/agent/simScripts';
-import { first, initials, money, TIER_DARK, TIER_RANK, WATER_BACKUP } from '@/lib/hn';
+import { first, initials, MEDICAL, money, TIER_DARK, TIER_RANK, WATER_BACKUP } from '@/lib/hn';
+import type { CatKind } from '@/context/StateFarmContext';
 import type { CustomerProfile, UrgencyLevel } from '@/types/statefarm';
 
 const TriageMap = dynamic(() => import('@/components/agent/TriageMap'), { ssr: false });
 
 const ROW_H = 72;
-const GRID = 'minmax(0,1.3fr) 110px minmax(0,1.4fr) 170px';
+const GRID = 'minmax(0,1.1fr) 96px minmax(0,1.1fr) 150px minmax(0,1.5fr)';
 // Events in the transcript: one accent for things that need attention, neutral otherwise.
 const DOT = { red: '#FF6B73', lavender: '#6E6878', blue: '#8FC3DD' } as const;
 
@@ -34,6 +35,8 @@ export default function AgentConsolePage() {
   const [msg, setMsg] = useState('');
   const [toast, setToast] = useState<string | null>(null);
   const [catAsk, setCatAsk] = useState(false);
+  const [catKind, setCatKind] = useState<CatKind>('storm');
+  const [help, setHelp] = useState(false);
   const storeRef = useRef(store);
   storeRef.current = store;
 
@@ -113,6 +116,109 @@ export default function AgentConsolePage() {
     showToast(`${num} approved and dispatched`);
   };
 
+  /** Latest thing that happened for this person, for the queue row. */
+  const lastChange = (id: string) => {
+    const ls = transcripts[id] || [];
+    for (let i = ls.length - 1; i >= 0; i--) {
+      const l = ls[i];
+      if (l.kind === 'handoff' || l.kind === 'claim') continue;
+      const who = l.kind === 'ai' ? 'Nora: ' : l.kind === 'agent' ? 'You: ' : l.kind === 'cust' ? first(customers.find((x) => x.id === id)?.name || '') + ': ' : '';
+      return `${l.time} · ${who}${l.tr || l.text}`;
+    }
+    return '';
+  };
+
+  /* ---- Keyboard: J/K move, S step in, A approve, M map, Q queue, ? help ---- */
+  const keyRef = useRef<(e: KeyboardEvent) => void>(() => {});
+  keyRef.current = (e: KeyboardEvent) => {
+    const el = e.target as HTMLElement;
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT')) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const k = e.key.toLowerCase();
+    const i = vis.findIndex((x) => x.id === sel);
+    if (k === 'j' || k === 'arrowdown') {
+      const n = vis[Math.min(vis.length - 1, i + 1)];
+      if (n) setSel(n.id);
+    } else if (k === 'k' || k === 'arrowup') {
+      const n = vis[Math.max(0, i - 1)];
+      if (n) setSel(n.id);
+    } else if (k === 's') {
+      if (!agentTakeover[sel]) {
+        if (!(callStatus[sel] === 'ai' || callStatus[sel] === 'agent')) store.setCallStatus(sel, 'agent');
+        store.stepIn(sel);
+      }
+    } else if (k === 'a') {
+      const num = store.approveClaimDraft(sel);
+      if (num) showToast(`${num} approved and dispatched`);
+    } else if (k === 'm') setView('map');
+    else if (k === 'q') setView('queue');
+    else if (k === 'd') setPanelOpen((o) => !o);
+    else if (k === '?') setHelp((h) => !h);
+    else if (k === 'escape') {
+      setHelp(false);
+      setPanelOpen(false);
+    } else return;
+    e.preventDefault();
+  };
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => keyRef.current(e);
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, []);
+
+  /* ---- Guided demo: Jordan's part (accept the transfer, speak, approve) ---- */
+  const demoStep = useRef('');
+  useEffect(() => {
+    if (!store.demo.on) {
+      demoStep.current = '';
+      return;
+    }
+    const id = 'cust-1';
+    const rq = contactRequests.find((r) => r.custId === id && r.status === 'waiting');
+    const said = (transcripts[id] || []).some((l) => l.kind === 'agent');
+    const cl = claims[id];
+    let next = '';
+    let run: () => void = () => {};
+    let wait = 3000;
+    if (rq && demoStep.current === '') {
+      next = 'accept';
+      run = () => {
+        setSel(id);
+        setView('queue');
+        store.acceptContactRequest(rq.id);
+      };
+    } else if (agentTakeover[id] && !said && demoStep.current === 'accept') {
+      next = 'speak';
+      run = () =>
+        store.sendAgentMessage(
+          id,
+          customers.find((x) => x.id === id)?.language === 'es'
+            ? 'Hola Sofía, soy Jordan de State Farm. Ya tengo todo lo que habló con Nora. Voy a aprobar su reclamo y hoy le mando un plomero.'
+            : 'Hi Sofia, this is Jordan from State Farm. I have everything you told Nora. I’m approving your claim and sending a plumber today.',
+        );
+    } else if (said && cl && cl.status !== 'approved' && demoStep.current === 'speak') {
+      next = 'approve';
+      wait = 6000;
+      run = () => {
+        const num = store.approveClaimDraft(id);
+        if (num) showToast(`${num} approved and dispatched`);
+      };
+    } else if (cl?.status === 'approved' && demoStep.current === 'approve') {
+      next = 'done';
+      run = () => {
+        store.stopDemo();
+        showToast('Demo complete');
+      };
+    }
+    if (!next) return;
+    const t = setTimeout(() => {
+      demoStep.current = next;
+      run();
+    }, wait);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [store.demo.on, contactRequests, agentTakeover, transcripts, claims]);
+
   const callText = (x: CustomerProfile): [string, string, boolean] => {
     const rq = contactRequests.find((r) => r.custId === x.id && r.status === 'waiting');
     if (rq) return ['Wants a person', '#FF6B73', true];
@@ -162,6 +268,14 @@ export default function AgentConsolePage() {
         draftCount={counts.Drafts}
         catOn={store.catMode.on}
         onCat={() => (store.catMode.on ? store.setCatMode(false) : setCatAsk(true))}
+        demoOn={store.demo.on}
+        onDemo={() => {
+          if (store.demo.on) return store.stopDemo();
+          window.open('/customer', 'hn-portal', 'width=1180,height=900');
+          store.startDemo();
+          showToast('Demo started · the portal opens in its own window');
+        }}
+        onHelp={() => setHelp(true)}
         lastSync={store.lastSync}
         dbStatus={store.dbStatus}
         customers={customers}
@@ -270,6 +384,7 @@ export default function AgentConsolePage() {
                 <div>Priority</div>
                 <div>Situation</div>
                 <div>Call</div>
+                <div>Latest</div>
               </div>
               <div className="flex-1 overflow-auto">
                 <div className="relative" style={{ height: vis.length * ROW_H }}>
@@ -299,6 +414,7 @@ export default function AgentConsolePage() {
                           <div className="text-[13px] text-[#8A8494] truncate">
                             {x.age} · {x.livesAlone ? 'lives alone' : 'with family'}
                             {x.language === 'es' ? ' · Spanish' : ''}
+                            {MEDICAL[x.id] && store.catMode.kind === 'outage' ? ' · medical' : ''}
                           </div>
                         </div>
                         <div className="flex items-baseline gap-2">
@@ -319,6 +435,9 @@ export default function AgentConsolePage() {
                         <div className="flex items-center gap-2 text-[14px] whitespace-nowrap overflow-hidden" style={{ color: stc }}>
                           {pulse && <Dot color={stc === '#FF6B73' ? stc : '#8FC3DD'} />}
                           {st}
+                        </div>
+                        <div className="min-w-0 text-[13px] text-[#8A8494] truncate" title={lastChange(x.id)}>
+                          {lastChange(x.id)}
                         </div>
                       </div>
                     );
@@ -605,9 +724,28 @@ export default function AgentConsolePage() {
         <div className="fixed inset-0 z-40 bg-black/60 flex items-center justify-center p-4" onClick={() => setCatAsk(false)}>
           <div className="w-full max-w-[460px] rounded-xl bg-panel border border-white/[.1] p-6 flex flex-col gap-4" onClick={(e) => e.stopPropagation()}>
             <div className="text-[20px] font-semibold">Declare a catastrophe event?</div>
+            <div className="grid grid-cols-2 gap-2">
+              {(
+                [
+                  ['storm', 'Winter storm', 'Calls by risk score'],
+                  ['outage', 'Power outage', 'Medical equipment first'],
+                ] as const
+              ).map(([k, label, sub]) => (
+                <button
+                  key={k}
+                  onClick={() => setCatKind(k)}
+                  className="text-left p-3 rounded-lg border bg-transparent text-ink cursor-pointer"
+                  style={{ borderColor: catKind === k ? '#F4F1F6' : 'rgba(255,255,255,.12)' }}
+                >
+                  <div className="font-semibold">{label}</div>
+                  <div className="text-[13px] text-mist">{sub}</div>
+                </button>
+              ))}
+            </div>
             <p className="m-0 text-[15px] text-mist leading-relaxed">
-              Nora will start calling every policyholder in the {store.catMode.name} zone right away, highest risk first. Anyone who reports damage or presses 1 for a
-              person comes to this queue. The policyholder portal shows a storm notice.
+              Nora starts calling every policyholder in the zone right away
+              {catKind === 'outage' ? ', starting with households that rely on powered medical equipment' : ', highest risk first'}. Anyone who reports damage or presses 1
+              for a person comes to this queue.
             </p>
             <div className="flex justify-end gap-2">
               <button onClick={() => setCatAsk(false)} className="h-10 px-4 rounded-lg border border-white/[.14] bg-transparent text-ink cursor-pointer">
@@ -616,7 +754,7 @@ export default function AgentConsolePage() {
               <button
                 onClick={() => {
                   setCatAsk(false);
-                  store.setCatMode(true);
+                  store.setCatMode(true, catKind);
                   showToast('Catastrophe mode on · Nora is dialing');
                 }}
                 className="h-10 px-4 rounded-lg bg-sf-red text-white font-semibold cursor-pointer"
@@ -624,6 +762,27 @@ export default function AgentConsolePage() {
                 Activate
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {help && (
+        <div className="fixed inset-0 z-40 bg-black/60 flex items-center justify-center p-4" onClick={() => setHelp(false)}>
+          <div className="w-full max-w-[380px] rounded-xl bg-panel border border-white/[.1] p-6 flex flex-col gap-3" onClick={(e) => e.stopPropagation()}>
+            <div className="text-[18px] font-semibold">Keyboard shortcuts</div>
+            {[
+              ['J / K', 'Next / previous policyholder'],
+              ['S', 'Step in on the call'],
+              ['A', 'Approve claim & dispatch'],
+              ['D', 'Details panel'],
+              ['M / Q', 'Map / queue'],
+              ['?', 'This list'],
+            ].map(([k, v]) => (
+              <div key={k} className="flex items-center gap-3 text-[15px]">
+                <span className="min-w-[56px] text-center px-2 py-0.5 rounded-md bg-panel-2 border border-white/[.1] font-mono text-[13px]">{k}</span>
+                <span className="text-mist">{v}</span>
+              </div>
+            ))}
           </div>
         </div>
       )}

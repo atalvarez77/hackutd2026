@@ -13,7 +13,7 @@ import type {
   ToolCall,
   UrgencyLevel,
 } from '@/types/statefarm';
-import { first, hazardFor, HAZARD_RE, nowTime } from '@/lib/hn';
+import { first, hazardFor, HAZARD_RE, MEDICAL, nowTime } from '@/lib/hn';
 import { claimStatusFromDb, connectSpacetime, custIdOf, tierFromScore, type DbStatus, type SpacetimeBridge } from '@/lib/spacetime';
 
 const CLAIM_RANK: Record<ClaimFlow['status'], number> = { none: 0, draft: 1, submitted: 2, approved: 3 };
@@ -33,12 +33,17 @@ export interface AppState {
   callStatus: Record<string, CallStatus>;
   reqSeq: number;
   /** Catastrophe mode: declared by an agent, Nora dials everyone in the zone. */
-  catMode: { on: boolean; name: string; at?: number };
+  catMode: { on: boolean; name: string; kind: CatKind; at?: number };
+  /** Guided demo: portal and console play their parts on their own while this is on. */
+  demo: { on: boolean; at?: number };
   /** Bumped by Reset so other tabs drop their old state instead of merging it back in. */
   epoch: number;
   /** Last-write time per slot (e.g. "cs:cust-1"), so tabs can merge instead of overwriting. */
   stamps: Record<string, number>;
 }
+
+export type CatKind = 'storm' | 'outage';
+export const CAT_NAME: Record<CatKind, string> = { storm: 'Winter Storm Heather', outage: 'Dallas power outage' };
 
 const REQ_RANK = { waiting: 0, accepted: 1, closed: 2 } as const;
 
@@ -99,6 +104,7 @@ function mergeState(local: AppState, remote: AppState): AppState {
     customers,
     activeCustomerId: pick('active', local.activeCustomerId, remote.activeCustomerId),
     catMode: pick('cat', local.catMode, remote.catMode),
+    demo: pick('demo', local.demo, remote.demo),
     claims,
     contactRequests: [...reqs.values()],
     agentTakeover: { ...local.agentTakeover, ...remote.agentTakeover },
@@ -162,7 +168,8 @@ function initialState(): AppState {
     priorityOverride: {},
     callStatus: { 'cust-1': 'ringing', 'cust-6': 'ai', 'cust-2': 'ai' },
     reqSeq: 0,
-    catMode: { on: false, name: 'Winter Storm Heather' },
+    catMode: { on: false, name: CAT_NAME.storm, kind: 'storm' },
+    demo: { on: false },
     epoch: 0,
     stamps: {},
   };
@@ -198,7 +205,10 @@ interface Ctx extends AppState {
   setPriorityOverride: (custId: string, tier: UrgencyLevel | null) => void;
   setCallStatus: (custId: string, s: CallStatus) => void;
   patchCustomer: (custId: string, p: Partial<CustomerProfile>) => void;
-  setCatMode: (on: boolean) => void;
+  setCatMode: (on: boolean, kind?: CatKind) => void;
+  /** Reset, then play the whole story: catastrophe → Sofia's call → transfer → approval. */
+  startDemo: () => void;
+  stopDemo: () => void;
   resetToDefaults: () => void;
 }
 
@@ -601,18 +611,24 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
    * Catastrophe mode: Nora dials every policyholder in the zone, highest risk first. Background
    * customers get a short scripted call in this tab; the active policyholder's phone rings in the portal.
    */
-  const setCatMode: Ctx['setCatMode'] = (on) => {
+  const setCatMode: Ctx['setCatMode'] = (on, kind = 'storm') => {
     catTimers.current.forEach(clearTimeout);
     catTimers.current = [];
     const s0 = stateRef.current;
-    update((s) => touch({ ...s, catMode: { ...s.catMode, on, at: on ? Date.now() : undefined } }, 'cat'));
+    const name = CAT_NAME[kind];
+    update((s) => touch({ ...s, catMode: { on, kind, name, at: on ? Date.now() : undefined } }, 'cat'));
     if (!on) {
       s0.customers.forEach((c) => appendLine(c.id, { kind: 'event', text: 'Catastrophe mode ended by Jordan M.', dot: 'lavender' }));
       return;
     }
-    const order = [...s0.customers].sort((a, b) => b.riskScore - a.riskScore);
+    // Outage: households with powered medical equipment first, then by risk.
+    const order = [...s0.customers].sort((a, b) => (kind === 'outage' ? Number(!!MEDICAL[b.id]) - Number(!!MEDICAL[a.id]) : 0) || b.riskScore - a.riskScore);
     order.forEach((c, i) => {
-      appendLine(c.id, { kind: 'event', text: `${s0.catMode.name} declared · Nora calling (priority ${i + 1} of ${order.length})`, dot: 'red' });
+      appendLine(c.id, {
+        kind: 'event',
+        text: `${name} declared · Nora calling (priority ${i + 1} of ${order.length})${kind === 'outage' && MEDICAL[c.id] ? ` · medical: ${MEDICAL[c.id]}` : ''}`,
+        dot: 'red',
+      });
       patchCustomer(c.id, { riskScore: Math.min(98, c.riskScore + 6) });
       const cs = s0.callStatus[c.id];
       if (cs === 'ai' || cs === 'agent') return;
@@ -622,7 +638,13 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       const damaged = !!c.detectedHazard && c.detectedHazard !== 'None';
       const t0 = 2500 + i * 2200;
       const at = (ms: number, fn: () => void) => catTimers.current.push(setTimeout(fn, t0 + ms));
-      const hi = { en: `Hi ${first(c.name)}, this is Nora from State Farm about the storm. Are you and the house okay?`, es: `Hola ${first(c.name)}, le habla Nora de State Farm por la tormenta. ¿Están bien usted y su casa?` };
+      const hi =
+        kind === 'outage'
+          ? {
+              en: `Hi ${first(c.name)}, this is Nora from State Farm about the power outage.${MEDICAL[c.id] ? ' Is your medical equipment still running?' : ' Are you and the house okay?'}`,
+              es: `Hola ${first(c.name)}, le habla Nora de State Farm por el apagón.${MEDICAL[c.id] ? ' ¿Su equipo médico sigue funcionando?' : ' ¿Están bien usted y su casa?'}`,
+            }
+          : { en: `Hi ${first(c.name)}, this is Nora from State Farm about the storm. Are you and the house okay?`, es: `Hola ${first(c.name)}, le habla Nora de State Farm por la tormenta. ¿Están bien usted y su casa?` };
       const ans = damaged
         ? { en: 'We’re safe, but there’s some damage to the house.', es: 'Estamos bien, pero hay daños en la casa.' }
         : { en: 'All good here, thanks for calling.', es: 'Todo bien, gracias por llamar.' };
@@ -642,6 +664,29 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         setCallStatus(c.id, 'ended');
       });
     });
+  };
+
+  const resetToDefaults = () => {
+    catTimers.current.forEach(clearTimeout);
+    catTimers.current = [];
+    try {
+      localStorage.removeItem(KEY);
+    } catch {}
+    const fresh = { ...initialState(), epoch: Date.now() };
+    stateRef.current = fresh;
+    setState(fresh);
+  };
+
+  const setDemo = (on: boolean) => update((s) => touch({ ...s, demo: { on, at: on ? Date.now() : undefined } }, 'demo'));
+
+  const startDemo: Ctx['startDemo'] = () => {
+    resetToDefaults();
+    // Let the reset land (and reach the other tabs) before the story starts.
+    setTimeout(() => {
+      update((s) => touch({ ...s, activeCustomerId: 'cust-1', callStatus: { ...s.callStatus, 'cust-1': 'idle' } }, 'active', 'cs:cust-1'));
+      setDemo(true);
+      setTimeout(() => setCatMode(true, 'storm'), 1200);
+    }, 400);
   };
 
   const value: Ctx = {
@@ -669,14 +714,9 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setCallStatus,
     patchCustomer,
     setCatMode,
-    resetToDefaults: () => {
-      catTimers.current.forEach(clearTimeout);
-      catTimers.current = [];
-      try {
-        localStorage.removeItem(KEY);
-      } catch {}
-      setState({ ...initialState(), epoch: Date.now() });
-    },
+    startDemo,
+    stopDemo: () => setDemo(false),
+    resetToDefaults,
   };
 
   return <StateFarmContext.Provider value={value}>{children}</StateFarmContext.Provider>;

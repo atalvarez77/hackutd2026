@@ -116,3 +116,14 @@ a {
 }
 .hn-pin-label.is-sel { background: #f4f1f6 !important; color: #141417 !important; }
 .hn-pin-label::before { display: none; }
+
+/* Reader settings on the policyholder side (toggled in the portal nav, saved per browser). */
+html.hn-large main { zoom: 1.18; }
+html.hn-contrast {
+  --color-grey: #1a1a1a;
+  --color-line: #6f6a64;
+  --color-lavender: #3a3340;
+  --color-petal-25: #ffffff;
+  --color-petal-50: #f1ece8;
+}
+html.hn-contrast main a, html.hn-contrast main button { text-decoration-thickness: 2px; }

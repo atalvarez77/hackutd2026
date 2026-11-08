@@ -12,6 +12,9 @@ export function AgentNav({
   draftCount,
   catOn,
   onCat,
+  demoOn,
+  onDemo,
+  onHelp,
   lastSync,
   dbStatus,
   customers,
@@ -24,6 +27,9 @@ export function AgentNav({
   draftCount: number;
   catOn: boolean;
   onCat: () => void;
+  demoOn: boolean;
+  onDemo: () => void;
+  onHelp: () => void;
   lastSync: number;
   dbStatus: DbStatus;
   customers: { id: string; name: string }[];
@@ -60,6 +66,12 @@ export function AgentNav({
           ))}
         </nav>
         <div className="flex-1" />
+        <button onClick={onHelp} title="Keyboard shortcuts (?)" className="h-[38px] w-[38px] rounded-[9px] border border-white/[.14] bg-transparent text-mist text-sm cursor-pointer">
+          ?
+        </button>
+        <button onClick={onDemo} className="h-[38px] px-3.5 rounded-[9px] border border-white/[.14] bg-transparent text-white text-sm cursor-pointer whitespace-nowrap">
+          {demoOn ? 'Stop demo' : 'Run demo'}
+        </button>
         <button
           onClick={onCat}
           className="h-[38px] px-3.5 rounded-[9px] font-semibold text-sm cursor-pointer whitespace-nowrap border"
