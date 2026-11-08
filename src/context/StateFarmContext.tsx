@@ -426,7 +426,9 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       const call = dbActiveCalls.filter((a) => a.customerId === n && a.status !== 'completed').sort((a, b) => Number(b.id - a.id))[0];
       openCallOut[id] = call;
       const triage = call ? dbTriage.filter((t) => t.callId === call.id).sort((a, b) => Number(b.ticketId - a.ticketId))[0] : undefined;
-      const dbClaim = call ? dbClaims.filter((c) => c.callId === call.id).sort((a, b) => Number(b.id - a.id))[0] : undefined;
+      const dbClaim = dbClaims
+        .filter((c) => c.customerId === n)
+        .sort((a, b) => Number(b.id - a.id))[0];
       // Home policy first (a customer can also hold an auto policy).
       const policy = dbPolicies.filter((x) => x.customerId === n).sort((a, b) => Number(a.policyId - b.policyId))[0];
       const dbCust = dbCustomers.find((x) => x.id === n);
@@ -495,15 +497,40 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   /* ---------------- Database writes (fire-and-forget) ---------------- */
   const dbCall = (p: Promise<void> | undefined) => void p?.catch((e) => console.warn('[SpacetimeDB reducer]', e));
   /** Ids of the customer's current session: open call (or one this tab started), its ticket and claim. */
-  const session = (custId: string) => {
-    const L = live.current;
-    const callId = L.openCall[custId]?.id ?? (pendingCall.current[custId] ||= newCallId());
-    const ticketId = L.dbTriage.filter((t) => t.callId === callId).sort((a, b) => Number(b.ticketId - a.ticketId))[0]?.ticketId ?? callId;
-    const claimId = L.dbClaims.filter((c) => c.callId === callId).sort((a, b) => Number(b.id - a.id))[0]?.id ?? callId;
-    const n = dbIdOf(custId);
-    const policyId = L.dbPolicies.filter((x) => x.customerId === n).sort((a, b) => Number(a.policyId - b.policyId))[0]?.policyId ?? n;
-    return { callId, ticketId, claimId, policyId, customerId: n };
-  };
+const session = (custId: string) => {
+  const L = live.current;
+  const n = dbIdOf(custId);
+
+  // 1. Find the most recent claim for this customer in SpacetimeDB
+  const existingDbClaim = L.dbClaims
+    .filter((c) => c.customerId === n)
+    .sort((a, b) => Number(b.id - a.id))[0];
+
+  // 2. Find the most recent call (even if completed) or fall back to openCall
+  const mostRecentCall = dbActiveCalls
+    .filter((a) => a.customerId === n)
+    .sort((a, b) => Number(b.id - a.id))[0];
+
+  const callId =
+    L.openCall[custId]?.id ??
+    mostRecentCall?.id ??
+    (pendingCall.current[custId] ||= newCallId());
+
+  const ticketId =
+    L.dbTriage
+      .filter((t) => t.customerId === n)
+      .sort((a, b) => Number(b.ticketId - a.ticketId))[0]?.ticketId ?? callId;
+
+  // Re-use the existing claim's ID if one was already drafted!
+  const claimId = existingDbClaim?.id ?? callId;
+
+  const policyId =
+    L.dbPolicies
+      .filter((x) => x.customerId === n)
+      .sort((a, b) => Number(a.policyId - b.policyId))[0]?.policyId ?? n;
+
+  return { callId, ticketId, claimId, policyId, customerId: n };
+};
   const pushClaim = (custId: string, cl: ClaimFlow, customerApproved: boolean) => {
     const c = live.current.conn;
     if (!c) return;
@@ -727,12 +754,37 @@ export const StateFarmProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     return handleTurn(custId, r, channel);
   };
 
-  const customerTurn: Ctx['customerTurn'] = async (custId, input, channel) => {
-    if (input.text) appendLine(custId, { kind: 'cust', text: input.text, channel }, { synced: true });
-    if (input.dtmf) appendLine(custId, { kind: 'event', text: `Policyholder pressed ${input.dtmf} on the keypad`, dot: 'lavender' });
+  const customerTurn: Ctx['customerTurn'] = async (
+    custId: string,
+    input: any,
+    channelOrOpts: any = 'call'
+  ) => {
+    // Normalize arguments whether called from WelfareCall or NoraChat
+    const rawText: string | undefined = typeof input === 'string' ? input : input?.text;
+    const dtmf: string | undefined = typeof input === 'object' ? input?.dtmf : undefined;
+    const event: string | undefined = typeof input === 'object' ? input?.event : undefined;
+    const channel: 'call' | 'chat' = typeof channelOrOpts === 'string' ? channelOrOpts : (channelOrOpts?.channel || 'call');
+
+    if (rawText) {
+      appendLine(custId, { kind: 'cust', text: rawText, channel }, { synced: true });
+    }
+    if (dtmf) {
+      appendLine(custId, { kind: 'event', text: `Policyholder pressed ${dtmf} on the keypad`, dot: 'lavender' });
+    }
+
     const r = await queued(custId, () =>
-      postRaw<TurnResult>('/api/chat', { ...turnBody(custId, channel), user_transcript: input.text, dtmf: input.dtmf, event: input.event }, 45000),
+      postRaw<TurnResult>(
+        '/api/chat',
+        {
+          ...turnBody(custId, channel),
+          user_transcript: rawText,
+          dtmf,
+          event,
+        },
+        45000,
+      ),
     );
+
     return handleTurn(custId, r, channel);
   };
 
