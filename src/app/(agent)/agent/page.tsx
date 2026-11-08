@@ -8,6 +8,7 @@ import { ToolTrace } from '@/components/ui/ToolTrace';
 import { RiskFactor } from '@/components/ui/RiskFactor';
 import { StreamText } from '@/components/ui/StreamText';
 import { ClaimChip } from '@/components/ui/Chips';
+import { LIVE_FEED_ENABLED, LiveNoraFeed } from '@/components/agent/LiveNoraFeed';
 import type { Line } from '@/types/statefarm';
 import { first, initials, money, TIER_DARK, TIER_RANK, WATER_BACKUP } from '@/lib/hn';
 import type { CustomerProfile, UrgencyLevel } from '@/types/statefarm';
@@ -31,6 +32,7 @@ export default function AgentConsolePage() {
   const [view, setView] = useState<AgentView>('queue');
   const [filter, setFilter] = useState<'All' | 'High' | 'Drafts'>('All');
   const [panelOpen, setPanelOpen] = useState(false);
+  const [feedOpen, setFeedOpen] = useState(false);
   const [msg, setMsg] = useState('');
   const [toast, setToast] = useState<string | null>(null);
   const [help, setHelp] = useState(false);
@@ -396,6 +398,14 @@ export default function AgentConsolePage() {
             {(live || takeover) && <Dot color="#8FC3DD" />}
             <span className="font-semibold">{takeover ? 'You took over from Nora.' : live ? 'Nora is on the call.' : 'No live call.'}</span>
             <span className="text-mist">{takeover ? 'AI is paused and watching.' : live ? 'You can step in at any time.' : cs === 'ended' ? 'Call ended.' : ''}</span>
+            {LIVE_FEED_ENABLED && (
+              <button
+                onClick={() => setFeedOpen(true)}
+                className="ml-auto min-h-[44px] px-3 rounded-lg border border-white/[.14] bg-transparent text-ink text-[14px] cursor-pointer whitespace-nowrap"
+              >
+                {live ? '● Open live Nora feed' : 'View last call with Nora'}
+              </button>
+            )}
           </div>
 
           <div ref={scrollRef} className="flex-1 overflow-y-auto overflow-x-hidden px-[18px] py-4 flex flex-col gap-3">
@@ -656,6 +666,17 @@ export default function AgentConsolePage() {
           </div>
         </div>
       )}
+
+      <LiveNoraFeed
+        open={feedOpen}
+        onClose={() => setFeedOpen(false)}
+        customer={c}
+        lines={lines}
+        toolRuns={toolRuns[c.id]}
+        callStatus={cs}
+        takeover={takeover}
+        onTakeOver={() => store.stepIn(c.id)}
+      />
 
       {toast && (
         <div className="fixed left-1/2 bottom-6 -translate-x-1/2 z-30 px-4 py-2.5 rounded-[10px] bg-ink text-panel font-medium shadow-[0_10px_30px_rgba(0,0,0,.2)] hn-in">{toast}</div>
