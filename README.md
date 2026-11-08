@@ -1,163 +1,486 @@
-# HeyNeighbor · We knock first.
 
-**Nora is State Farm's AI assistant for disasters and emergencies.** When an alert hits an area, she phones the policyholders most at risk first. On that one call she checks that they're safe, starts the claim, confirms the details out loud, and submits it with their OK. They don't need an app, a login or a form, and they can reach a person at any time.
+# HeyNeighbor
 
-Built at HackUTD 2026 for the State Farm track.
+**We'll call you before you have to call us. We knock first.**
 
----
+HeyNeighbor is a proactive disaster-response assistant built for HackUTD 2026. It uses an AI assistant named Nora to contact policyholders during emergencies, check on their safety, provide guidance, gather property-damage information, and prepare insurance claims.
 
-## What it does
+The project combines NVIDIA Nemotron for conversational reasoning, FastAPI for backend orchestration, and SpacetimeDB for shared, real-time application state.
 
-**For the policyholder (portal at `/customer`)**
-- **A normal phone call.** The screen looks like an iPhone call, with branded caller ID showing "Verified caller" and why State Farm is calling. The caller just talks, in English or Spanish.
-- **Nora decides everything live** from what the caller says: what to ask next, whether to open a claim, which details are confirmed, when to text them, when to submit, when to hand off. Nothing is pre-scripted.
-- **Phone keypad:** 1 for a person, 2 to repeat, 3 to switch between Spanish and English.
-- **Family can join:** "add call" brings the emergency contact onto the call.
-- **Texts and Messages:** Nora's texts arrive as iPhone notifications and stay in a Messages screen.
-- **Live claim tracker:** the claim fills in as details are confirmed. When an agent approves it, the timeline moves to *Approved → Help is on the way* immediately, and a status text arrives.
-- **Accessibility:** live captions, Larger text, High contrast, and **Easier words**, which explains insurance terms and asks Nora to use simple language.
+## Overview
 
-**For the agent (console at `/agent`)**
-- **Priority queue** ranked by urgency and risk, plus a **map** of policyholders with clickable pins.
-- **Needs approval** lane: claims waiting for a person, with Review and Approve.
-- **Live transcript** of every call, and **Nora's actions** as she takes them.
-- **Step in** at any time: Nora goes quiet, and the agent gets a handoff summary.
-- **Edit claim** to correct Nora's claim type, estimate or description before approving.
-- **Shows which details are unconfirmed,** so the agent sees exactly where Nora isn't sure.
-- **Keyboard shortcuts** (`?` lists them): J/K to move, S to step in, A to approve, D for details, M/Q for map/queue.
-- **Optional Live Nora feed popup** (see `NEXT_PUBLIC_LIVE_FEED` below).
+HeyNeighbor has two main interfaces:
 
----
+- **Policyholder Portal (`/customer`):** A simulated phone-call experience where users can speak with Nora, receive safety guidance, provide damage information, and track their claims.
+- **Agent Console (`/agent`):** A dashboard where human agents can monitor calls, review policyholder risk, intervene in conversations, and approve claims.
 
-## How it works
+The application follows a human-in-the-loop workflow. Nora gathers information and prepares claims, but a human agent reviews and approves claims before they are finalized.
 
+## Features
+
+### Policyholder Portal
+
+- Simulated incoming calls with browser-based voice interaction.
+- AI-generated conversations in English and Spanish.
+- Live captions and conversation transcripts.
+- Keypad controls for transferring to an agent, replaying responses, and changing languages.
+- Claim preparation using available policyholder information.
+- Verbal confirmation before claim submission.
+- Emergency contact notifications with permission.
+- In-app messaging and claim status tracking.
+- Accessibility settings, including larger text, high contrast, and simplified language.
+
+### Agent Console
+
+- Risk-prioritized policyholder queue.
+- Interactive map displaying simulated policyholder locations across the Dallas–Fort Worth area.
+- Live call transcripts and Nora's actions.
+- Ability for agents to join active calls and take over conversations.
+- Claim review, editing, and approval workflows.
+- Access to policyholder information, risk breakdowns, and claim details.
+- Keyboard shortcuts for common agent actions.
+- Optional live Nora activity feed.
+
+## Architecture
+
+HeyNeighbor uses four main components:
+
+| Component | Responsibility |
+|---|---|
+| Next.js / React | Policyholder portal, simulated phone interface, and agent console |
+| FastAPI | Conversation orchestration, session management, action validation, and backend operations |
+| NVIDIA Nemotron | Conversational reasoning and structured action generation |
+| SpacetimeDB | Shared application state and real-time synchronization |
+
+### Application Flow
+
+```mermaid
+flowchart TD
+    A["Policyholder Portal"] --> B["FastAPI Orchestrator"]
+    B <--> C["NVIDIA Nemotron via NIM"]
+    B --> D["Action Validation"]
+    D --> E["SpacetimeDB"]
+    E --> F["Agent Console"]
+    E --> A
+    F --> E
 ```
-Emergency alert ──▶ Risk ranking ──▶ Nora calls the most at-risk first
-                                          │
-                                Caller talks (EN/ES, any phone)
-                                          │
-                 FastAPI orchestrator ──▶ Nemotron decides what Nora says & does
-                        │                  (open claim, confirm details, text,
-                        │                   transfer, submit, end call)
-                        ▼
-                  SpacetimeDB  ◀──── live sync ────▶  Agent console
-              (call, triage, claim)                 (queue, Needs approval)
-                        │                                  │
-                        ▼                                  ▼
-          Portal timeline + texts  ◀── approve ── Agent reviews / edits / approves
+
+### Frontend
+
+The frontend is built with Next.js, React, and TypeScript.
+
+It contains the policyholder portal, browser-based phone interface, claim form, and agent console. The frontend handles user interaction, speech recognition, text-to-speech, captions, and displaying application state.
+
+Conversation messages and user actions are sent to FastAPI for processing. The frontend does not independently determine Nora's conversational decisions.
+
+### Backend
+
+FastAPI acts as the central orchestrator between the frontend, Nemotron, and SpacetimeDB.
+
+It is responsible for:
+
+- Starting and managing call sessions.
+- Maintaining conversation history.
+- Sending caller messages and relevant context to Nemotron.
+- Processing model-generated responses and actions.
+- Validating requested actions before executing them.
+- Updating transcripts, triage information, and claims.
+- Handling agent interventions and claim approvals.
+
+The backend also handles agent actions, allowing changes made through the console to update shared application state.
+
+## AI Implementation
+
+Nora uses NVIDIA Nemotron through NVIDIA NIM.
+
+**Primary model:** `nvidia/llama-3.1-nemotron-70b-instruct`
+
+The model receives conversation history along with relevant policyholder and claim information. It generates two outputs in a single inference pass:
+
+1. A conversational response for Nora to communicate to the caller.
+2. Structured JSON containing application actions and suggested replies.
+
+Available actions include:
+
+| Action | Purpose |
+|---|---|
+| `open_claim` | Opens or prepares a claim |
+| `update_risk` | Updates a policyholder's risk information |
+| `confirm_details` | Records confirmed claim information |
+| `notify_emergency_contact` | Requests an emergency contact notification |
+| `text_caller` | Sends a message to the policyholder |
+| `submit_claim` | Initiates the claim submission workflow |
+| `transfer_to_agent` | Transfers the conversation to a human agent |
+| `set_language` | Changes the conversation language |
+| `end_call` | Ends the active call |
+
+The backend parses the model response, extracts the structured output, and validates requested actions before carrying them out. Response handling also accounts for reasoning tokens and Markdown formatting that may appear around JSON output.
+
+The primary model is configured through backend environment variables. The backend also contains a fallback sequence for alternative available models.
+
+### Consent and Claim Approval
+
+Claim processing uses separate customer-consent and agent-approval steps.
+
+1. Nora gathers the policyholder's damage information.
+2. A claim draft is created or updated.
+3. Nora asks the policyholder for explicit verbal consent.
+4. The backend records the customer's approval.
+5. The claim enters the agent review queue.
+6. A human agent reviews and approves the claim.
+7. The shared application state and customer-facing claim timeline are updated.
+
+Nora does not independently determine insurance coverage. Coverage decisions and final claim approval remain with human agents.
+
+### Failure Handling
+
+If Nemotron is not configured or cannot respond, the backend returns an error and the interface indicates that Nora is unavailable. The application does not replace unavailable model responses with canned conversational answers.
+
+## SpacetimeDB
+
+SpacetimeDB serves as the shared source of truth for the application. It stores information used by both the policyholder portal and agent console and synchronizes updates as they occur.
+
+For example, when Nora updates a call transcript or creates a claim:
+
+1. FastAPI processes the event.
+2. The appropriate SpacetimeDB reducer updates the database.
+3. Connected clients receive the updated state through real-time subscriptions.
+4. The agent console and policyholder portal reflect the changes without requiring a manual refresh.
+
+Agent actions, such as editing or approving a claim, follow the same process. This keeps the customer-facing interface and agent dashboard synchronized.
+
+### Database Tables
+
+| Table | Purpose |
+|---|---|
+| `customers` | Policyholder profiles, contact information, and vulnerability details |
+| `policies` | Policy numbers, types, deductibles, and coverage limits |
+| `active_calls` | Active call sessions, transcripts, and call status |
+| `triage_queue` | Risk scores, hazard classifications, and prioritization information |
+| `claims` | Claim descriptions, estimates, customer consent, and agent approval status |
+
+### Reducers
+
+The SpacetimeDB module uses reducers to handle application state changes.
+
+Important reducers include:
+
+- `init_simulation`
+- `update_call_transcript`
+- `update_triage_score`
+- `create_or_update_claim`
+- `agent_approve_claim`
+- `join_call_by_agent`
+- `end_call`
+
+TypeScript bindings generated from the SpacetimeDB module are located in `src/module_bindings/`.
+
+## Risk Prioritization
+
+HeyNeighbor uses a configurable weighted scoring model to prioritize households based on environmental conditions, vulnerability, property risk, and historical information.
+
+\[
+S = \min(100,\; w_E E + w_V V + w_P P + w_H H)
+\]
+
+The vulnerability component is calculated as:
+
+\[
+V = 0.5\left(\frac{A}{100}\right) + 0.3L + 0.2F
+\]
+
+Where:
+
+- \(E\): Environmental risk
+- \(V\): Household vulnerability
+- \(P\): Property risk
+- \(H\): Historical risk
+- \(A\): Age
+- \(L\): Whether the policyholder lives alone
+- \(F\): Communication or technology barriers
+
+The resulting score helps organize the agent's queue by relative priority. This is prototype scoring logic, not a validated emergency-response standard.
+
+## Tech Stack
+
+| Category | Technologies |
+|---|---|
+| Frontend | Next.js 16, React 19, TypeScript |
+| Styling | Tailwind CSS v4 |
+| Animation | Framer Motion |
+| Mapping | Leaflet, React Leaflet |
+| Icons | Lucide React |
+| Backend | Python, FastAPI |
+| AI | NVIDIA Nemotron, NVIDIA NIM |
+| AI Client | OpenAI-compatible API client |
+| Database | SpacetimeDB |
+| Voice | Web Speech API, Web Audio API |
+
+## Design System
+
+HeyNeighbor uses two distinct visual styles to support the different needs of policyholders and insurance agents. The customer experience is designed to feel approachable and accessible, while the agent console prioritizes information density, readability, and efficient workflows.
+
+### Policyholder Experience
+
+The policyholder portal uses a warm, light interface with soft blush tones and State Farm red for primary actions.
+
+Design priorities include:
+
+- Large, readable typography and clear visual hierarchy.
+- A familiar phone interface for simulated incoming calls.
+- Simple navigation and straightforward claim information.
+- Accessible controls for text size, contrast, and simplified language.
+- Minimal visual clutter to keep important safety information easy to find.
+
+### Agent Experience
+
+The agent console uses a darker, neutral interface designed for extended desktop use.
+
+Design priorities include:
+
+- Dense but organized information layouts.
+- Clear visual separation between the call queue, map, transcripts, and claim details.
+- Color used primarily to communicate urgency, status, and warnings.
+- Persistent access to important policyholder and call information.
+- Efficient workflows for joining calls, editing claims, and approving submissions.
+
+### Visual Language
+
+| Element | Design choice |
+|---|---|
+| Primary accent | State Farm red (`#E61A21`) |
+| Customer background | Off-white and warm light tones |
+| Agent background | Dark neutral tones |
+| Typography | Source Sans 3 |
+| Wordmark | Bold italic styling |
+| Logo | Red shield and house mark |
+| Interaction style | Clear states, visible focus, and direct actions |
+
+The design uses consistent spacing, readable typography, and clear component states across both interfaces while allowing each experience to serve its own audience.
+
+### Color Contrast
+
+The following are measured contrast ratios from the design:
+
+| Color combination | Contrast ratio |
+|---|---:|
+| Primary portal red (`#E61A21`) on white | 4.6:1 |
+| Body text (`#474954`) on white | 8.9:1 |
+| Console secondary text (`#C5C9D0`) | 9.6:1 |
+| Urgent indicator (`#EF8E87`) | 6.7:1+ |
+| Informational indicator (`#A8C4D6`) | 8.7:1+ |
+| Caution indicator (`#DDBB72`) | 8.6:1+ |
+
+Color is not the only indicator of status; labels and other visual cues are also used to communicate information.
+
+## Getting Started
+
+### Requirements
+
+- Node.js 20 or later
+- Python 3.9 or later
+- NVIDIA NIM API key
+- SpacetimeDB configuration for database-backed functionality
+
+The frontend and backend run separately. Use two terminal windows.
+
+### 1. Clone the Repository
+
+```bash
+git clone https://github.com/atalvarez77/hackutd2026.git
+cd hackutd2026
 ```
 
-- **Next.js frontend** (`src/`): the phone, portal and agent console. It sends what the caller says or presses to FastAPI, plays back Nora's reply and shows her actions. It doesn't decide where the conversation goes.
-- **FastAPI orchestrator** (`backend/`): owns each call. It keeps the conversation history, asks Nemotron for the next reply and actions, validates and carries those out, and writes everything to SpacetimeDB. It's also the gateway for the agent's writes (step in, approve, edit, hang up).
-- **NVIDIA Nemotron** (via NVIDIA NIM): sees the whole call, the caller's profile and the claim's state, and returns Nora's reply, her actions and suggested caller replies.
-- **SpacetimeDB** (`statefarm-backend/spacetimedb/`): the source of truth for customers, policies, calls, the triage queue and claims, synced live to every open screen.
-
-**No canned answers.** If Nemotron isn't configured or doesn't respond, Nora says she's unavailable instead of making something up.
-
----
-
-## Running it locally
-
-You need **Node 20+** and **Python 3.9+**. Use two terminals.
-
-### 1. Backend (FastAPI)
+### 2. Set Up the Backend
 
 ```bash
 cd backend
 python -m pip install -r requirements.txt
+```
+
+Create a `.env` file inside the `backend/` directory:
+
+```env
+NVIDIA_API_KEY=nvapi-your-key
+```
+
+The following variables can also be configured:
+
+```env
+NVIDIA_MODEL=nvidia/llama-3.1-nemotron-70b-instruct
+NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
+
+SPACETIMEDB_URI=https://maincloud.spacetimedb.com
+SPACETIMEDB_DB=your-database-id
+```
+
+The NVIDIA API key is required for Nora's AI conversations. SpacetimeDB settings are needed for the shared database functionality.
+
+Start the backend:
+
+```bash
 python -m uvicorn main:app --reload --port 8000
 ```
 
-Create `backend/.env` (it's gitignored) with your NVIDIA key:
+Check the backend health endpoint:
 
-```
-NVIDIA_API_KEY=nvapi-...
-```
+`http://localhost:8000/api/health`
 
-Check http://localhost:8000/api/health. It should return `"nemotron": true`.
+### 3. Set Up the Frontend
 
-### 2. Frontend (Next.js)
+Return to the project root and install the dependencies:
 
 ```bash
 npm install
+```
+
+Create a `.env.local` file in the project root:
+
+```env
+NEXT_PUBLIC_ORCHESTRATOR_URL=http://localhost:8000
+
+NEXT_PUBLIC_SPACETIME_URI=wss://maincloud.spacetimedb.com
+NEXT_PUBLIC_SPACETIME_DB=your-database-id
+
+NEXT_PUBLIC_SPACETIME=on
+NEXT_PUBLIC_LIVE_FEED=off
+```
+
+Replace the database value with the appropriate SpacetimeDB database ID.
+
+Configuration options:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `NEXT_PUBLIC_ORCHESTRATOR_URL` | `http://localhost:8000` | FastAPI backend address |
+| `NEXT_PUBLIC_SPACETIME_URI` | `wss://maincloud.spacetimedb.com` | SpacetimeDB connection address |
+| `NEXT_PUBLIC_SPACETIME_DB` | Team database ID | SpacetimeDB database |
+| `NEXT_PUBLIC_SPACETIME` | `on` | Set to `off` to disable SpacetimeDB integration |
+| `NEXT_PUBLIC_LIVE_FEED` | `off` | Set to `true` to display the Live Nora feed |
+
+When SpacetimeDB is disabled, synchronization is limited to the same browser rather than shared across connected clients.
+
+### 4. Run the Frontend
+
+From the project root:
+
+```bash
 npm run dev
 ```
 
-Then open:
-- http://localhost:3000: home
-- http://localhost:3000/customer: the policyholder portal and phone
-- http://localhost:3000/agent: the agent console
+Open the application at:
 
-The agent console header shows whether FastAPI and Nemotron are reachable.
+- Home: `http://localhost:3000`
+- Policyholder portal: `http://localhost:3000/customer`
+- Agent console: `http://localhost:3000/agent`
 
-**Tip for demos:** open the portal and the agent console side by side. Click **Reset** in the console before each run.
+For testing, open the customer portal and agent console in separate browser tabs.
 
----
+## API Reference
 
-## Configuration
+The FastAPI backend exposes the following endpoints:
 
-| Variable | Where | Default | What it does |
-|---|---|---|---|
-| `NVIDIA_API_KEY` | `backend/.env` | (none) | **Required for Nora to talk.** Your NVIDIA NIM API key. |
-| `NVIDIA_MODEL` | `backend/.env` | (fallback list) | Preferred model; falls back through several Nemotron and Llama models. |
-| `NVIDIA_BASE_URL` | `backend/.env` | `https://integrate.api.nvidia.com/v1` | NIM endpoint. |
-| `SPACETIMEDB_URI` | `backend/.env` | `https://maincloud.spacetimedb.com` | SpacetimeDB host the orchestrator writes to. |
-| `SPACETIMEDB_DB` | `backend/.env` | team database id | SpacetimeDB database. |
-| `NEXT_PUBLIC_ORCHESTRATOR_URL` | `.env.local` | `http://localhost:8000` | Where the frontend finds FastAPI. |
-| `NEXT_PUBLIC_SPACETIME_URI` | `.env.local` | `wss://maincloud.spacetimedb.com` | SpacetimeDB host the frontend subscribes to. |
-| `NEXT_PUBLIC_SPACETIME_DB` | `.env.local` | team database id | SpacetimeDB database. |
-| `NEXT_PUBLIC_SPACETIME` | `.env.local` | on | Set to `off` to run without SpacetimeDB. Tabs then sync only within one browser. |
-| `NEXT_PUBLIC_LIVE_FEED` | `.env.local` | off | Set to `true` to show the **Live Nora feed** popup in the agent console. |
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `GET` | `/api/health` | Checks backend and Nemotron availability |
+| `POST` | `/api/call/start` | Starts a call session |
+| `POST` | `/api/chat` | Processes a caller message, keypad input, or event |
+| `POST` | `/api/transcript` | Records transcript entries |
+| `POST` | `/api/call/join` | Allows an agent to join an active call |
+| `POST` | `/api/call/end` | Ends an active call |
+| `POST` | `/api/triage` | Updates triage information |
+| `POST` | `/api/claim` | Creates or updates claim information |
+| `POST` | `/api/claim/approve` | Handles agent claim approval |
 
----
+## Project Structure
 
-## Project layout
-
+```text
+hackutd2026/
+│
+├── backend/
+│   ├── main.py
+│   ├── conversation.py
+│   ├── nemotron_service.py
+│   └── requirements.txt
+│
+├── statefarm-backend/
+│   └── spacetimedb/
+│       └── src/
+│           └── lib.rs
+│
+├── public/
+│
+├── src/
+│   ├── app/
+│   │   ├── (policyholder)/
+│   │   ├── (agent)/
+│   │   └── api/
+│   │
+│   ├── components/
+│   │   ├── portal/
+│   │   ├── agent/
+│   │   └── ui/
+│   │
+│   ├── context/
+│   │   └── StateFarmContext.tsx
+│   │
+│   ├── data/
+│   │   └── mockCustomers.ts
+│   │
+│   ├── lib/
+│   │   ├── backend.ts
+│   │   ├── reader.ts
+│   │   ├── voice.ts
+│   │   └── i18n.ts
+│   │
+│   └── module_bindings/
+│
+├── .gitignore
+├── package.json
+├── package-lock.json
+├── tsconfig.json
+└── README.md
 ```
-backend/                     FastAPI orchestrator
-  main.py                    call sessions, Nora turns, actions, SpacetimeDB writes, agent gateway
-  conversation.py            the Nemotron conversation (prompt, actions, JSON handling)
-  nemotron_service.py        NVIDIA client + model fallback list
-statefarm-backend/spacetimedb/
-  src/lib.rs                 tables (customers, policies, active_calls, triage_queue, claims) + reducers
-src/
-  app/(policyholder)/        home, portal (/customer), web claim form (/customer/claim)
-  app/(agent)/agent/         agent console
-  components/portal/         phone (WelfareCall), claim summary + timeline, text chat
-  components/agent/          map, claim editor, Live Nora feed
-  context/StateFarmContext   app state: SpacetimeDB rows + UI state shared across tabs
-  lib/backend.ts             FastAPI client
-  lib/reader.ts              Larger text / High contrast / Easier words
-  module_bindings/           generated SpacetimeDB TypeScript bindings
-```
-
-### FastAPI endpoints
-
-| Endpoint | Purpose |
-|---|---|
-| `GET /api/health` | Up? Is Nemotron configured? |
-| `POST /api/call/start` | Nora opens a call or chat |
-| `POST /api/chat` | One caller turn: words, a keypad digit, or an event |
-| `POST /api/transcript` | Log a line said outside a Nora turn (e.g. the agent) |
-| `POST /api/call/join` · `/api/call/end` | Agent steps in · hang up |
-| `POST /api/triage` · `/api/claim` · `/api/claim/approve` | Triage update · claim create/edit/consent · agent approval |
-
----
 
 ## Accessibility
 
-- Voice-first with live captions on the phone screen.
-- English and Spanish, switchable during a call.
-- Larger text, High contrast and Easier words. These settings are remembered.
-- Colour contrast checked against WCAG AA (4.5:1 or better).
-- Visible keyboard focus, a skip link, real headings and labelled fields.
-- Status changes are announced to screen readers.
-- Touch targets of 44px or more, and no animation when reduced motion is on.
+Accessibility features are incorporated into the policyholder experience:
+
+- Voice-first interaction with live captions.
+- English and Spanish language support.
+- Larger text, high contrast, and simplified language settings.
+- Screen-reader announcements for status changes.
+- Visible keyboard focus and labeled form fields.
+- Touch targets of at least 44 pixels.
+- Reduced-motion support.
+
+The agent console is primarily designed for desktop use.
+
+## Known Limitations
+
+HeyNeighbor is a hackathon prototype, not a production insurance platform.
+
+- Policyholder profiles, policies, claims, and geographic locations use simulated data.
+- Phone calls are simulated through the browser rather than a production telephony service.
+- SMS and messaging are demonstrated within the application rather than through a production messaging provider.
+- The project has not been fully validated end to end with live NVIDIA NIM credentials and a live SpacetimeDB deployment.
+- FastAPI call history is stored in memory and is lost when the backend restarts.
+- Browser voice capabilities depend on browser support; Chrome and Edge are recommended.
+- The agent console is desktop-oriented and currently English-only.
+- Agent edits do not currently update Nora's existing in-memory claim context.
+- The prototype risk model has not been validated for real-world emergency decisions.
+
+A production implementation would require secure telephony and messaging integrations, authorized insurance policy and claims access, persistent session storage, validated risk models, and additional privacy, security, and reliability testing.
+
+## Future Improvements
+
+- Integration with real-time disaster alerts and geographic risk data.
+- Production telephony and SMS integration.
+- Authorized insurance policy and claims system integration.
+- Persistent conversation history and improved agent handoff.
+- Expanded mobile support and additional accessibility testing.
+- Further validation of risk prioritization and multilingual interactions.
 
 ---
 
-## Notes
-
-- All policyholder data is mock data for the demo.
-- Nora prepares claims, but a State Farm agent approves every one. She never says a claim *is* covered.
-- Built with Next.js, React, Tailwind CSS, FastAPI, NVIDIA Nemotron (NIM) and SpacetimeDB.
+**Built at HackUTD 2026** · State Farm · NVIDIA · SpacetimeDB
